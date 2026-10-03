@@ -45,7 +45,7 @@ concurrency:
 jobs:
   admit_request:
     name: Admit exact requested Telegram behavior proof
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     steps:
       - name: Check maintainer authority and exact PR head
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -233,7 +233,7 @@ jobs:
     name: Finalize request-bound evidence
     needs: [admit_request, run_telegram_proof]
     if: ${{ always() && needs.admit_request.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     timeout-minutes: 15
     steps:
       - name: Checkout trusted finalizer

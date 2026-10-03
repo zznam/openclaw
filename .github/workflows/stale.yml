@@ -250,7 +250,7 @@ jobs:
     if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true) }}
     permissions:
       issues: write
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     steps:
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
@@ -687,7 +687,7 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
     permissions:
       issues: read
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     steps:
       - name: Reject Barnacle NOT_PLANNED bug closures
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9

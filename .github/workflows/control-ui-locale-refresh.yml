@@ -64,7 +64,7 @@ jobs:
     if: >-
       github.repository == 'openclaw/openclaw' &&
       (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     outputs:
       locales: ${{ steps.base.outputs.locales }}
       sha: ${{ steps.base.outputs.sha }}
@@ -108,7 +108,7 @@ jobs:
     name: Verify generated PR App permissions
     needs: resolve-base
     if: needs.resolve-base.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -157,7 +157,7 @@ jobs:
       max-parallel: 4
       matrix:
         locale: ${{ fromJSON(needs.resolve-base.outputs.locales) }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     name: Refresh ${{ matrix.locale }}
     steps:
       - name: Checkout
@@ -223,7 +223,7 @@ jobs:
       needs.publisher-preflight.result == 'success' &&
       needs.refresh.result == 'success' &&
       !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

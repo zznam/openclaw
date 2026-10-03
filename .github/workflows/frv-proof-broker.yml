@@ -21,7 +21,7 @@ concurrency:
 jobs:
   prove:
     name: Prove targeted job rerun boundary
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     timeout-minutes: 20
     permissions:
       actions: write

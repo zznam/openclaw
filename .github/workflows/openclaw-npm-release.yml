@@ -348,7 +348,7 @@ jobs:
   approve_openclaw_npm_release:
     needs: validate_publish_request
     if: ${{ !inputs.preflight_only && needs.validate_publish_request.result == 'success' && needs.validate_publish_request.outputs.parent_approval != 'receipt' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     environment: npm-release
     permissions:
       contents: read
@@ -361,7 +361,7 @@ jobs:
     # npm trusted publishing + provenance requires this to stay on ubuntu-latest.
     needs: [validate_publish_request, approve_openclaw_npm_release]
     if: ${{ always() && !cancelled() && !inputs.preflight_only && needs.validate_publish_request.result == 'success' && (needs.approve_openclaw_npm_release.result == 'success' || (needs.approve_openclaw_npm_release.result == 'skipped' && needs.validate_publish_request.outputs.parent_approval == 'receipt')) }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     environment: npm-publish
     permissions:
       actions: read

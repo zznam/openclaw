@@ -26,7 +26,7 @@ jobs:
   publish:
     name: Dispatch the prepared release once
     if: github.repository == 'openclaw/openclaw'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     permissions:
       actions: write
@@ -71,7 +71,7 @@ jobs:
     name: Join publication and verify ClawHub downloads
     needs: publish
     if: needs.publish.result == 'success' && needs.publish.outputs.request != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     timeout-minutes: 150
     permissions:
       actions: read
@@ -123,7 +123,7 @@ jobs:
     # Approval waits must not hold the Linux updater publication queue.
     needs: [publish, verify]
     if: needs.publish.result == 'success' && needs.verify.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     environment: npm-release
     permissions: {}
@@ -137,7 +137,7 @@ jobs:
     name: Make the verified GitHub release visible
     needs: [publish, verify, approve_activation]
     if: needs.publish.result == 'success' && needs.verify.result == 'success' && needs.approve_activation.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     concurrency:
       group: linux-app-release-publish
@@ -236,7 +236,7 @@ jobs:
     needs: [publish, finalize]
     if: ${{ !cancelled() && needs.publish.result == 'success' && needs.finalize.result == 'success' && fromJSON(needs.publish.outputs.request).inputs.npm_dist_tag == 'latest' && !contains(fromJSON(needs.publish.outputs.request).inputs.tag, '-beta.') }}
     continue-on-error: true
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     timeout-minutes: 5
     permissions:
       actions: write
@@ -288,7 +288,7 @@ jobs:
     needs: [publish, finalize]
     if: ${{ !cancelled() && needs.publish.result == 'success' && needs.finalize.result == 'success' && needs.publish.outputs.npm_dist_tag != 'extended-stable' && !contains(needs.publish.outputs.release_tag, '-beta.') }}
     continue-on-error: true
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     permissions:
       actions: write
@@ -336,7 +336,7 @@ jobs:
     needs: [publish, finalize]
     if: ${{ !cancelled() && needs.publish.result == 'success' && needs.finalize.result == 'success' && ((fromJSON(needs.publish.outputs.request).inputs.windows_node_tag || '') != '' || (fromJSON(needs.publish.outputs.request).inputs.windows_node_installer_digests || '') != '') && !contains(fromJSON(needs.publish.outputs.request).inputs.tag, '-beta.') }}
     continue-on-error: true
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     permissions:
       actions: write

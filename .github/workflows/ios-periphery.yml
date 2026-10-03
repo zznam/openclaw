@@ -26,7 +26,7 @@ permissions:
 jobs:
   scope:
     name: Detect iOS scan scope
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     outputs:
       should-scan: ${{ steps.scope.outputs.should-scan }}
     steps:

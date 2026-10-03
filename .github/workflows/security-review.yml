@@ -44,7 +44,7 @@ jobs:
     concurrency:
       group: ${{ github.event_name == 'schedule' && 'security-review-reconcile' || format('security-review-resolve-{0}', github.run_id) }}
       cancel-in-progress: false
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     timeout-minutes: 85
     outputs:
       matrix: ${{ steps.event.outputs.matrix }}
@@ -109,7 +109,7 @@ jobs:
   reconcile-backlog:
     needs: [resolve, review]
     if: ${{ always() && needs.resolve.outputs.truncated == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     timeout-minutes: 2
     permissions: {}
     steps:
@@ -133,7 +133,7 @@ jobs:
       actions: read
       issues: write
       statuses: write
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     timeout-minutes: 85
     env:
       OPENCLAW_SECURITY_REVIEW_PR_NUMBER: ${{ matrix.pr }}

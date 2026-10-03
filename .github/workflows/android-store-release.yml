@@ -38,7 +38,7 @@ jobs:
       (inputs.operation == 'release' || inputs.operation == 'internal')))
     permissions:
       contents: write
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     timeout-minutes: 120
     environment: ${{ (github.event_name == 'schedule' || inputs.operation == 'internal') && 'android-internal' || 'android-store-release' }}
     steps:

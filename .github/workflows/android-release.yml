@@ -54,7 +54,7 @@ env:
 jobs:
   publish_signed_android_apk:
     name: Publish signed Android APK
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     timeout-minutes: 45
     environment: android-release
     env:
