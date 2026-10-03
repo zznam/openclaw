@@ -232,7 +232,7 @@ jobs:
     name: Bind requested PR and candidate
     needs: [resolve_request, validate_candidate]
     if: ${{ inputs.request_id != '' && needs.resolve_request.outputs.should_run == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     steps:
       - name: Require an exact same-repository PR request
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -334,7 +334,7 @@ jobs:
     name: Finalize request-bound evidence
     needs: [admit_bound_request, run_request_proof, validate_candidate]
     if: ${{ always() && needs.admit_bound_request.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     timeout-minutes: 15
     steps:
       - name: Checkout trusted finalizer
@@ -367,7 +367,7 @@ jobs:
     name: Publish Mantis web UI chat evidence
     needs: [resolve_request, run_web_ui_chat]
     if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && needs.run_web_ui_chat.outputs.artifact_name != '' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     environment: qa-live-shared
     steps:
       - name: Checkout harness ref

@@ -29,7 +29,7 @@ env:
 jobs:
   plan:
     name: Plan npm placeholder publication
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -178,7 +178,7 @@ jobs:
   verify:
     name: Verify npm placeholder publication
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     timeout-minutes: 15
     permissions:
       actions: read
@@ -261,7 +261,7 @@ jobs:
     name: Publish npm placeholders
     needs: [plan, verify]
     if: inputs.dry_run != true
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
     timeout-minutes: 30
     environment: npm-release
     permissions:

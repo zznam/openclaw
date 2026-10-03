@@ -23,7 +23,7 @@ permissions:
 jobs:
   scope:
     name: Detect shared OpenClawKit scan scope
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     outputs:
       should-scan: ${{ steps.scope.outputs.should-scan }}
     steps:
@@ -261,7 +261,7 @@ jobs:
     name: Intersect shared OpenClawKit dead code
     needs: [scope, scan-ios, scan-macos]
     if: ${{ always() && needs.scope.outputs.should-scan == 'true' && needs.scan-ios.result != 'cancelled' && needs.scan-macos.result != 'cancelled' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

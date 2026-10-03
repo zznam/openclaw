@@ -28,7 +28,7 @@ jobs:
         ((github.event.workflow_run.event == 'push' && vars.OPENCLAW_CI_ON_PUSH == 'true' &&
           github.event.workflow_run.actor.login != 'github-actions[bot]') ||
          github.event.workflow_run.event == 'schedule')))
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     timeout-minutes: 5
     outputs:
       allowed: ${{ steps.verify.outputs.allowed }}
@@ -95,7 +95,7 @@ jobs:
     concurrency:
       group: docs-agent-main
       cancel-in-progress: false
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
     timeout-minutes: 30
     steps:
       - name: Checkout
