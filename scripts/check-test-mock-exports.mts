@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { requireComparisonHistory } from "./lib/comparison-history.mts";
 import { scanClosedMockFactories } from "./lib/mock-factory-scan.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
@@ -55,12 +56,13 @@ function parseBaseline(source: string) {
 }
 
 function currentFactories(root: string, staged: boolean, ref?: string) {
+  const env = ref ? { ...process.env, GIT_NO_LAZY_FETCH: "1" } : process.env;
   const files = execFileSync(
     "git",
     ref
       ? ["ls-tree", "-r", "--name-only", "-z", ref]
       : ["ls-files", "-z", ...(staged ? [] : ["--cached", "--others", "--exclude-standard"])],
-    { cwd: root, maxBuffer: MAX_BUFFER },
+    { cwd: root, maxBuffer: MAX_BUFFER, env },
   )
     .toString("utf8")
     .split("\0")
@@ -83,7 +85,7 @@ function currentFactories(root: string, staged: boolean, ref?: string) {
       "--",
       ".",
     ],
-    { cwd: root, encoding: "utf8", maxBuffer: MAX_BUFFER },
+    { cwd: root, encoding: "utf8", maxBuffer: MAX_BUFFER, env },
   );
   if (grep.error || (grep.status !== 0 && grep.status !== 1)) {
     throw grep.error ?? new Error(grep.stderr || "Could not inventory mock factories");
@@ -154,6 +156,110 @@ function currentFactories(root: string, staged: boolean, ref?: string) {
   return { entries, locations };
 }
 
+function historicalBaseline(root: string, base: string) {
+  requireComparisonHistory(root, base);
+  const introductions = execFileSync(
+    "git",
+    [
+      "log",
+      "--reverse",
+      "--topo-order",
+      "--diff-filter=A",
+      "--format=%H",
+      `${base}..HEAD`,
+      "--",
+      BASELINE,
+    ],
+    { cwd: root, encoding: "utf8" },
+  )
+    .trim()
+    .split(/\s+/u)
+    .filter(Boolean);
+  if (introductions.length === 0) {
+    return null;
+  }
+  if (introductions.length !== 1) {
+    throw new Error("Mock factory baseline requires one unambiguous policy introduction");
+  }
+  const introduction = introductions[0]!;
+  const parents = execFileSync("git", ["show", "-s", "--format=%P", introduction], {
+    cwd: root,
+    encoding: "utf8",
+  })
+    .trim()
+    .split(/\s+/u)
+    .filter(Boolean);
+  if (parents.length !== 1) {
+    throw new Error("Mock factory policy introduction requires its complete single-parent history");
+  }
+  const baseline = loadRatchetReference(root, introduction, BASELINE, parseBaseline);
+  if (baseline === null) {
+    throw new Error("Could not load historical mock factory policy introduction");
+  }
+  // Retire every allowance removed after genesis, including removals on a
+  // merged parent. Re-adding it later must not resurrect grandfathered debt.
+  const allowed = new Set(baseline);
+  const patches = execFileSync(
+    "git",
+    [
+      "log",
+      "--format=",
+      "--full-history",
+      "--diff-merges=separate",
+      "--no-renames",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--patch",
+      "--unified=0",
+      `${base}..HEAD`,
+      "--",
+      BASELINE,
+    ],
+    {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: MAX_BUFFER,
+      env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+    },
+  );
+  let removed = new Set<string>();
+  let added = new Set<string>();
+  const retire = () => {
+    for (const entry of removed) {
+      if (!added.has(entry)) {
+        allowed.delete(entry);
+      }
+    }
+    removed = new Set();
+    added = new Set();
+  };
+  for (const line of patches.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      retire();
+    } else if (
+      (line.startsWith("+") && !line.startsWith("+++")) ||
+      (line.startsWith("-") && !line.startsWith("---"))
+    ) {
+      const destination = line.startsWith("+") ? added : removed;
+      for (const entry of parseBaseline(line.slice(1))) {
+        destination.add(entry);
+      }
+    }
+  }
+  retire();
+  // Intersect authority across committed snapshots, including historical reverts.
+  // Discarded entries confer no authority; prove only surviving exact parent debt.
+  const inherited = currentFactories(root, false, parents[0]!).entries;
+  const uninherited = compareRatchetSets(allowed, inherited).added;
+  if (uninherited.length > 0) {
+    const examples = uninherited.slice(0, 4);
+    throw new Error(
+      `Initial mock factory baseline may only admit exact factories from its parent (${uninherited.length} unproven entries; ${examples.join("; ")})`,
+    );
+  }
+  return allowed;
+}
+
 export function main(root = process.cwd(), argv = process.argv.slice(2)) {
   try {
     const args = parseRatchetArgs(argv);
@@ -165,9 +271,10 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       throw new Error("Mock factory ratchet requires a Git base commit");
     }
     const reference = loadRatchetReference(root, base, BASELINE, parseBaseline);
-    // Bootstrap and old branch bases derive existing debt from that revision's
-    // sources; a missing ledger never authorizes new factories or allowances.
-    const allowed = reference ?? currentFactories(root, false, base).entries;
+    // A long-lived branch may predate the policy. Admit its historical genesis
+    // only after proving every allowance existed before the policy was added.
+    const allowed =
+      reference ?? historicalBaseline(root, base) ?? currentFactories(root, false, base).entries;
     const current = currentFactories(root, args.staged);
     const write = (entries: Set<string>) =>
       fs.writeFileSync(

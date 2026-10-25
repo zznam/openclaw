@@ -63,6 +63,11 @@ For skill selection, compliance, and multi-turn workflow evals, use the
 
 Follow the [mock recipe](/help/testing/fixtures#module-mocks-and-export-completeness)
 for export preservation, state-isolating mocks, annotations, and the shrinking baseline.
+When a comparison predates this policy, the guard permanently retires every committed
+ledger removal, rejects current resurrection, and verifies surviving genesis allowances
+against exact factory fingerprints in the policy introduction’s immediate parent.
+Retired historical entries confer no present authority. New factories and fabricated
+initial allowances that remain live are errors.
 
 ## Raw SQLite state access
 

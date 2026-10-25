@@ -19,6 +19,103 @@ function git(cwd: string, ...args: string[]) {
 }
 
 describe("first-party mock export ratchet", () => {
+  it("verifies historical policy genesis against parent debt and still rejects expansion", () => {
+    const root = temporary.make("openclaw-mock-policy-history-");
+    for (const dir of ["config", "src", "test"]) {
+      fs.mkdirSync(path.join(root, dir));
+    }
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "example" }));
+    fs.writeFileSync(path.join(root, "src/value.ts"), "export const read = () => 1;");
+    const factory = 'vi.mock("../src/value.js", () => ({read: vi.fn()}));\n';
+    const file = path.join(root, "test/example.test.ts");
+    const baseline = path.join(root, "config/test-mock-exports-baseline.txt");
+    git(root, "init");
+    git(root, "add", ".");
+    git(root, "commit", "-m", "old fork before policy and debt");
+    git(root, "tag", "old-fork");
+    fs.writeFileSync(file, factory);
+    git(root, "add", ".");
+    git(root, "commit", "-m", "inherited pre-policy factory");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root, ["--base", "HEAD", "--prune"])).toBe(0);
+    const approved = fs.readFileSync(baseline, "utf8");
+    git(root, "add", ".");
+    git(root, "commit", "-m", "introduce verified policy");
+    git(root, "tag", "policy");
+    expect(main(root, ["--base", "old-fork"])).toBe(0);
+
+    const extra = path.join(root, "test/extra.test.ts");
+    fs.writeFileSync(extra, factory);
+    fs.appendFileSync(
+      baseline,
+      approved
+        .split("\n")
+        .find((line) => line.startsWith("["))!
+        .replace("example.test.ts", "extra.test.ts") + "\n",
+    );
+    git(root, "add", ".");
+    git(root, "commit", "-m", "attempt post-policy allowance expansion");
+    expect(main(root, ["--base", "old-fork"])).toBe(1);
+    expect(main(root, ["--base", "missing-history"])).toBe(1);
+
+    git(root, "checkout", "-B", "retired-debt", "policy");
+    fs.rmSync(file);
+    fs.writeFileSync(
+      baseline,
+      approved
+        .split("\n")
+        .filter((line) => !line.startsWith("["))
+        .join("\n"),
+    );
+    git(root, "add", ".");
+    git(root, "commit", "-m", "retire inherited factory allowance");
+    expect(main(root, ["--base", "old-fork"])).toBe(0);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, factory);
+    fs.writeFileSync(baseline, approved);
+    expect(main(root, ["--base", "old-fork"])).toBe(1);
+    git(root, "add", ".");
+    git(root, "commit", "-m", "attempt to resurrect retired factory allowance");
+    expect(main(root, ["--base", "old-fork"])).toBe(1);
+
+    git(root, "checkout", "-B", "forged-genesis", "old-fork");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.mkdirSync(path.dirname(baseline), { recursive: true });
+    fs.writeFileSync(file, factory);
+    fs.writeFileSync(baseline, approved);
+    git(root, "add", ".");
+    git(root, "commit", "-m", "attempt same-commit factory allowance");
+    expect(main(root, ["--base", "old-fork"])).toBe(1);
+    fs.rmSync(file);
+    const empty = approved
+      .split("\n")
+      .filter((line) => !line.startsWith("["))
+      .join("\n");
+    fs.writeFileSync(baseline, empty);
+    git(root, "add", ".");
+    git(root, "commit", "-m", "retire every unproven genesis allowance");
+    expect(main(root, ["--base", "old-fork"])).toBe(0);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, factory);
+    fs.writeFileSync(baseline, approved);
+    git(root, "add", ".");
+    git(root, "commit", "-m", "attempt to restore unproven historical debt");
+    expect(main(root, ["--base", "old-fork"])).toBe(1);
+    fs.rmSync(file);
+    fs.writeFileSync(baseline, empty);
+    git(root, "add", ".");
+    git(root, "commit", "-m", "remove attempted resurrection before HEAD");
+    expect(main(root, ["--base", "old-fork"])).toBe(0);
+
+    git(root, "checkout", "-B", "malformed-genesis", "old-fork");
+    fs.mkdirSync(path.dirname(baseline), { recursive: true });
+    fs.writeFileSync(baseline, "not a ledger\n");
+    git(root, "add", ".");
+    git(root, "commit", "-m", "malformed policy genesis");
+    expect(main(root, ["--base", "old-fork"])).toBe(1);
+  });
+
   it("distinguishes real module pass-through, isolation, and closed or unproven factories", () => {
     const cases: [string, number][] = [
       ...[
