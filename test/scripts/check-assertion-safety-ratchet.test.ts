@@ -212,6 +212,178 @@ describe("check-assertion-safety-ratchet", () => {
     expect(readBaseline(root, baselinePath)).toEqual(new Map());
   });
 
+  it.each(["direct history", "CI-only fork", "changed fork source", "ambiguous fork history"])(
+    "verifies committed renames in %s when aggregate detection is exhausted",
+    (scenario) => {
+      const original =
+        firstAssertion +
+        Array.from({ length: 100 }, (_, index) => `// original line ${index}\n`).join("");
+      const noise = Object.fromEntries(
+        Array.from({ length: 4 }, (_, index) => [
+          `src/old-${index}.ts`,
+          `// old noise ${index}: ${"old".repeat(100)}\n`,
+        ]),
+      );
+      const root = fileFixture(
+        { "src/old[entry].ts": original, [baselineFile]: "src/old[entry].ts\t1\n", ...noise },
+        true,
+      );
+      const common = git(root, ["rev-parse", "HEAD"]).trim();
+      let ambiguousBase: string | undefined;
+      if (scenario === "ambiguous fork history") {
+        write(root, "fork-a.txt", "first independent fork commit\n");
+        git(root, ["add", "."]);
+        git(root, ["commit", "-m", "fork A"]);
+        const left = git(root, ["rev-parse", "HEAD"]).trim();
+        git(root, ["checkout", "-b", "fork-b", common]);
+        write(root, "fork-b.txt", "second independent fork commit\n");
+        git(root, ["add", "."]);
+        git(root, ["commit", "-m", "fork B"]);
+        const right = git(root, ["rev-parse", "HEAD"]).trim();
+        git(root, ["merge", "--no-ff", "-m", "one merge direction", left]);
+        const tree = git(root, ["rev-parse", "HEAD^{tree}"]).trim();
+        ambiguousBase = git(root, [
+          "commit-tree",
+          tree,
+          "-p",
+          left,
+          "-p",
+          right,
+          "-m",
+          "opposite merge direction",
+        ]).trim();
+      } else if (scenario !== "direct history") {
+        write(root, "fork-ci.txt", "fork-only runner configuration\n");
+        if (scenario === "changed fork source") {
+          write(
+            root,
+            "src/old[entry].ts",
+            original.replace("original line 42", "fork replacement line 42"),
+          );
+        }
+        git(root, ["add", "."]);
+        git(root, ["commit", "-m", "fork customization"]);
+      }
+      const base = ambiguousBase ?? git(root, ["rev-parse", "HEAD"]).trim();
+      if (scenario !== "direct history" && scenario !== "ambiguous fork history") {
+        git(root, ["checkout", "-b", "upstream-history", common]);
+      }
+      git(root, ["config", "diff.renameLimit", "1"]);
+      git(root, ["mv", "src/old[entry].ts", "src/renamed[entry].ts"]);
+      write(root, baselineFile, "src/renamed[entry].ts\t1\n");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "actual historical rename"]);
+      const destination = path.join(root, "src/renamed[entry].ts");
+      fs.appendFileSync(destination, "// later imported change\n");
+      for (let index = 0; index < 4; index++) {
+        fs.unlinkSync(path.join(root, `src/old-${index}.ts`));
+        write(root, `src/new-${index}.ts`, `// replacement ${index}: ${"new".repeat(100)}\n`);
+      }
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "later changes exceed the aggregate rename limit"]);
+      if (scenario !== "direct history") {
+        git(root, [
+          "-c",
+          "merge.renameLimit=256",
+          "merge",
+          "--no-ff",
+          "-m",
+          "import upstream history",
+          base,
+        ]);
+      }
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      const expected = ["changed fork source", "ambiguous fork history"].includes(scenario) ? 1 : 0;
+      expect(main(root, ["--base", base])).toBe(expected);
+      expect(main(root, ["--base", base, "--staged"])).toBe(expected);
+      if (expected !== 0) {
+        return;
+      }
+
+      fs.appendFileSync(destination, "// uncommitted replacement contents\n");
+      expect(main(root, ["--base", base])).toBe(1);
+      expect(main(root, ["--base", base, "--staged"])).toBe(0);
+      git(root, ["add", "."]);
+      expect(main(root, ["--base", base, "--staged"])).toBe(1);
+      fs.appendFileSync(destination, "export const extra = value as number;\n");
+      expect(main(root, ["--base", base])).toBe(1);
+    },
+  );
+
+  it("does not transfer one source allowance to both a direct match and a historical rename", () => {
+    const original =
+      firstAssertion +
+      Array.from({ length: 100 }, (_, index) => `// original line ${index}\n`).join("");
+    const root = fileFixture({ "src/old.ts": original, [baselineFile]: "src/old.ts\t1\n" }, true);
+    const base = git(root, ["rev-parse", "HEAD"]).trim();
+    git(root, ["mv", "src/old.ts", "src/historical.ts"]);
+    write(root, baselineFile, "src/historical.ts\t1\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "historical rename"]);
+    fs.appendFileSync(path.join(root, "src/historical.ts"), "// subsequent change\n");
+    write(root, "src/exact-copy.ts", original);
+    write(root, baselineFile, "src/exact-copy.ts\t1\nsrc/historical.ts\t1\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "attempt to spend the original allowance twice"]);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root, ["--base", base])).toBe(1);
+    expect(main(root, ["--base", base, "--staged"])).toBe(1);
+  });
+
+  it.each(["copy", "recreation", "competing source"])(
+    "does not transfer historical allowances through %s",
+    (scenario) => {
+      const original =
+        firstAssertion +
+        Array.from({ length: 100 }, (_, index) => `// original line ${index}\n`).join("");
+      const files: Record<string, string> = {
+        "src/old.ts": original,
+        [baselineFile]: "src/old.ts\t1\n",
+      };
+      if (scenario === "competing source") {
+        files["src/competitor.ts"] = original;
+      }
+      for (let index = 0; index < 4; index++) {
+        files[`src/old-${index}.ts`] = `// old noise ${index}: ${"old".repeat(100)}\n`;
+      }
+      const root = fileFixture(files, true);
+      const base = git(root, ["rev-parse", "HEAD"]).trim();
+      git(root, ["config", "diff.renameLimit", "1"]);
+      if (scenario === "copy") {
+        write(root, "src/renamed.ts", original);
+      } else {
+        git(root, ["mv", "src/old.ts", "src/renamed.ts"]);
+      }
+      if (scenario === "competing source") {
+        fs.unlinkSync(path.join(root, "src/competitor.ts"));
+      }
+      write(root, baselineFile, "src/renamed.ts\t1\n");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "historical transition"]);
+      if (scenario === "recreation") {
+        git(root, ["rm", "src/renamed.ts"]);
+        git(root, ["commit", "-m", "remove renamed file"]);
+        write(root, "src/renamed.ts", original);
+      }
+      if (scenario === "copy") {
+        fs.unlinkSync(path.join(root, "src/old.ts"));
+      }
+      fs.appendFileSync(path.join(root, "src/renamed.ts"), "// later imported change\n");
+      for (let index = 0; index < 4; index++) {
+        fs.unlinkSync(path.join(root, `src/old-${index}.ts`));
+        write(root, `src/new-${index}.ts`, `// replacement ${index}: ${"new".repeat(100)}\n`);
+      }
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "long import with unrelated changes"]);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      expect(main(root, ["--base", base])).toBe(1);
+      expect(main(root, ["--base", base, "--staged"])).toBe(1);
+    },
+  );
+
   it("allows rebaselining assertion debt already present in the base tree", () => {
     const { root, baselinePath } = ratchetFixture(
       `${firstAssertion}export const mergedConcurrently = value as number;\n`,

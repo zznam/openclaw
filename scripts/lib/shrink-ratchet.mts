@@ -317,6 +317,144 @@ function formatBaseline(counts: ReadonlyMap<string, number>, header: string) {
   return header + entries.join("\n") + (entries.length > 0 ? "\n" : "");
 }
 
+// Aggregate diffs across long imports can exceed Git's rename candidate limit.
+// Follow only apparent new allowances through small committed rename boundaries;
+// never infer identity by hiding competing sources from the aggregate diff.
+function committedRatchetRename(
+  root: string,
+  baseRef: string,
+  staged: boolean,
+  destination: string,
+  baseBaseline: ReadonlyMap<string, number>,
+  sourceRoots: string[],
+): string | undefined {
+  const git = (...args: string[]) =>
+    execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: GIT_MAX_BUFFER,
+      timeout: 60_000,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+    });
+  try {
+    git("merge-base", "--is-ancestor", baseRef, "HEAD");
+    if (git("rev-parse", "--is-shallow-repository").trim() === "true") {
+      return undefined;
+    }
+    // A committed history cannot vouch for edited worktree/index contents.
+    git(
+      "diff",
+      "--quiet",
+      ...(staged ? ["--cached"] : []),
+      "HEAD",
+      "--",
+      `:(literal)${destination}`,
+    );
+    let tip = "HEAD";
+    let cursor = destination;
+    for (let hop = 0; hop < 16; hop++) {
+      const commit = git(
+        "-c",
+        "diff.renameLimit=256",
+        "log",
+        "-1",
+        "--follow",
+        "--find-renames",
+        "--diff-filter=AR",
+        "--format=%H",
+        `${baseRef}..${tip}`,
+        "--",
+        `:(literal)${cursor}`,
+      ).trim();
+      if (!/^[0-9a-f]{40,64}$/u.test(commit)) {
+        return undefined;
+      }
+      const parents = git("show", "-s", "--format=%P", commit).trim().split(/\s+/u);
+      if (parents.length !== 1 || !parents[0]) {
+        return undefined;
+      }
+      const parent = parents[0];
+      const candidates = git(
+        "diff",
+        "--no-renames",
+        "--diff-filter=AD",
+        "--name-only",
+        "-z",
+        parent,
+        commit,
+        "--",
+        ...sourceRoots,
+      )
+        .split("\0")
+        .filter(Boolean);
+      // At most 256 squared similarity comparisons, even for adversarial history.
+      if (candidates.length > 512) {
+        return undefined;
+      }
+      const renameArgs = [
+        "-c",
+        "diff.renameLimit=256",
+        "diff",
+        "--name-status",
+        "-z",
+        "--find-renames",
+        parent,
+        commit,
+        "--",
+        ...sourceRoots,
+      ];
+      const fields = git(...renameArgs).split("\0");
+      let from: string | undefined;
+      for (let index = 0; index < fields.length;) {
+        const status = fields[index++];
+        const oldPath = fields[index++];
+        if (status?.startsWith("R") || status?.startsWith("C")) {
+          const newPath = fields[index++];
+          if (status.startsWith("R") && newPath === cursor) {
+            from = oldPath;
+          }
+        }
+      }
+      if (!from) {
+        return undefined; // Additions, copies, and recreation do not carry an allowance.
+      }
+      // If another deleted source can explain the destination, identity is ambiguous.
+      const alternatives = git(...renameArgs, `:(exclude,literal)${from}`).split("\0");
+      for (let index = 0; index < alternatives.length;) {
+        const status = alternatives[index++];
+        index++;
+        if (status?.startsWith("R") || status?.startsWith("C")) {
+          if (alternatives[index++] === cursor) {
+            return undefined;
+          }
+        }
+      }
+      if (baseBaseline.has(from)) {
+        // A fork-only base need not be an ancestor of an imported upstream rename.
+        // Its source must still be exactly the source inherited at their common base.
+        const common = git("merge-base", "--all", baseRef, parent).trim();
+        if (!/^[0-9a-f]{40,64}$/u.test(common)) {
+          return undefined;
+        }
+        const inherited = git("rev-parse", "--verify", `${common}:${from}`).trim();
+        if (git("rev-parse", "--verify", `${baseRef}:${from}`).trim() !== inherited) {
+          return undefined;
+        }
+        const retained = staged
+          ? git("ls-files", "--stage", "-z", "--", `:(literal)${from}`).length > 0
+          : fs.existsSync(path.join(root, from));
+        return retained ? undefined : from;
+      }
+      cursor = from;
+      tip = parent;
+    }
+  } catch {
+    // Missing/ambiguous history is not evidence for transferring an allowance.
+  }
+  return undefined;
+}
+
 function baselineWithVerifiedRenames(
   root: string,
   baseRef: string,
@@ -326,7 +464,20 @@ function baselineWithVerifiedRenames(
   sourceRoots: string[],
 ) {
   const allowed = new Map(baseBaseline);
-  for (const { from, to } of listRatchetRenames(root, baseRef, staged, sourceRoots)) {
+  const renames = listRatchetRenames(root, baseRef, staged, sourceRoots);
+  const directDestinations = new Set(renames.map(({ to }) => to));
+  const claimedSources = new Set(renames.map(({ from }) => from));
+  for (const [to, count] of baseline) {
+    if (count <= (baseBaseline.get(to) ?? 0) || directDestinations.has(to)) {
+      continue;
+    }
+    const from = committedRatchetRename(root, baseRef, staged, to, baseBaseline, sourceRoots);
+    if (from && !claimedSources.has(from)) {
+      renames.push({ from, to });
+      claimedSources.add(from);
+    }
+  }
+  for (const { from, to } of renames) {
     const oldCount = baseBaseline.get(from);
     const newCount = baseline.get(to);
     if (
