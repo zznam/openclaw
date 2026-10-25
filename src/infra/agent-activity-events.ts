@@ -6,7 +6,6 @@ import {
   projectAgentActivityItem,
   resolveCompletedActivityWrappers,
 } from "../agents/agent-activity-presentation.js";
-import { isProcessPollResultDetails } from "../agents/bash-tools.process-schema.js";
 import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
 import {
   inferToolMetaFromArgsCore,
@@ -50,7 +49,7 @@ export type AgentCommandOutputEventFields = {
 export type AgentCommandOutputEventData = Record<string, unknown> & AgentCommandOutputEventFields;
 
 /** Patch summary payload emitted after an agent applies file changes. */
-export type AgentPatchSummaryEventData = Record<string, unknown> & {
+type AgentPatchSummaryEventData = Record<string, unknown> & {
   itemId: string;
   phase: "end";
   title: string;
@@ -147,6 +146,20 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
   );
   // Outcome and visibility still belong to the original execution facts.
   return { ...activity, name: call.name };
+}
+
+/** Poll is the only process action that returns an aggregate for one session. */
+function isProcessPollResultDetails(value: unknown): boolean {
+  const details = asOptionalRecord(value);
+  return Boolean(
+    details &&
+    typeof details.sessionId === "string" &&
+    (details.status === "running" || details.status === "completed") &&
+    (typeof details.aggregated === "string" ||
+      (details.persistedDetailsTruncated === true &&
+        Array.isArray(details.originalDetailKeys) &&
+        details.originalDetailKeys.includes("aggregated"))),
+  );
 }
 
 export type AgentHistoryActivity = { messageId: string; items: AgentActivityItem[] };
@@ -339,16 +352,22 @@ export function projectAgentHistoryActivity(
       });
     }
   }
-  const prepared = [...facts].map(([key, fact]) => ({
-    key,
-    callId: fact.callId,
-    runId: fact.runId,
-    parentToolCallId: fact.parentToolCallId,
-    activity: projectAgentToolActivity({
+  const prepared = [...facts].map(([key, fact]) => {
+    const activity = projectAgentToolActivity({
       ...fact,
       ...(fact.name === "collab.wait" ? { nativeOperation: "wait" as const } : {}),
-    }),
-  }));
+    });
+    if (fact.result === undefined) {
+      activity.unpairedCall = true;
+    }
+    return {
+      key,
+      callId: fact.callId,
+      runId: fact.runId,
+      parentToolCallId: fact.parentToolCallId,
+      activity,
+    };
+  });
   const wrappers = resolveCompletedActivityWrappers(prepared);
   const preparedByKey = new Map(prepared.map((call) => [call.key, call]));
   return entries.flatMap(({ messageId, blocks, hasTools }) => {

@@ -1,5 +1,6 @@
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
 import type { ResolvedAgentConfig } from "../../agent-scope-config.js";
@@ -38,7 +39,7 @@ export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
 }) {
   return resolveNonNegativeIntegerOption(
     params.runTimeoutSeconds,
-    resolveNonNegativeIntegerOption(params.cfg?.agents?.defaults?.subagents?.runTimeoutSeconds, 0),
+    resolveNonNegativeIntegerOption(params.cfg.agents?.defaults?.subagents?.runTimeoutSeconds, 0),
   );
 }
 
@@ -50,6 +51,7 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   modelOverride?: string;
   thinkingOverrideRaw?: string;
   callerThinkingRaw?: string;
+  callerThinkingExplicit?: boolean;
   inheritedModel?: ModelRef;
   fastMode?: FastMode;
   workspaceDir?: string;
@@ -65,13 +67,7 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   const { model: requestedModel, profile: authProfileId } =
     splitTrailingAuthProfile(rawResolvedModel);
 
-  const thinkingPlan = resolveSubagentThinkingOverride({
-    cfg: params.cfg,
-    requesterAgentConfig: params.requesterAgentConfig,
-    targetAgentConfig: params.targetAgentConfig,
-    thinkingOverrideRaw: params.thinkingOverrideRaw,
-    callerThinkingRaw: params.callerThinkingRaw,
-  });
+  const thinkingPlan = resolveSubagentThinkingOverride(params);
   if (thinkingPlan.status === "error") {
     const { provider, model } = splitModelRef(requestedModel);
     // The hint is provider/model-specific because valid thinking levels vary by backend.
@@ -146,9 +142,12 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
     modelRef: choice.ref,
     ...(inheritedModel ? { inheritedModel: choice.ref } : {}),
     modelApplied: true,
-    thinkingOverride: thinkingPlan.thinkingOverride,
     initialSessionPatch: {
-      model: resolvedModel,
+      model: choice.ref.model,
+      modelProvider: choice.ref.provider,
+      modelOverride: choice.ref.model,
+      providerOverride: choice.ref.provider,
+      modelOverrideRouteResolution: "resolved" as const,
       modelOverrideSource,
       ...(modelOrigin
         ? {
@@ -166,6 +165,6 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
         : {}),
       ...thinkingPlan.initialSessionPatch,
       ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
-    },
+    } satisfies Partial<InternalSessionEntry>,
   };
 }

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { hasErrnoCode } from "../../infra/errors.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import {
   createUpdateDoctorProcessCustody,
   type UpdateDoctorProcessNamespace,
@@ -15,28 +16,27 @@ import {
   readCommandProcessFailure,
 } from "../../process/exec-result.js";
 import {
+  resolveCommandEnv,
   runUtf8CommandWithTimeout,
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
 import { parseOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type { UpdateDoctorInput } from "./update-command-migrated-types.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 /** Inspect the same published --check contract consumed by candidate canary. */
 export async function inspectUpdateDoctorChildSupport(
-  argv: string[],
+  worker: { workerUrl: URL; argv: string[] },
   options: CommandOptions,
   assertCurrent: () => void,
 ): Promise<boolean> {
   assertCurrent();
-  const workerPath = argv[1];
-  if (!workerPath) {
-    throw new UpdateCommandRecoveryPendingError("Target Doctor worker path is missing.");
-  }
   try {
-    await fs.lstat(workerPath);
+    await fs.lstat(worker.workerUrl);
   } catch (cause) {
     if (hasErrnoCode(cause, "ENOENT")) {
       // Candidate canary preserves this pre-worker published-target contract.
@@ -51,7 +51,7 @@ export async function inspectUpdateDoctorChildSupport(
   assertCurrent();
   let result: SpawnResult;
   try {
-    result = await runUtf8CommandWithTimeout([...argv, "--check"], {
+    result = await runUtf8CommandWithTimeout([...worker.argv, "--check"], {
       ...options,
       killProcessTree: true,
       requireProcessTreeExtinction: true,
@@ -117,7 +117,8 @@ export async function runUpdateDoctorProcess(
       "Doctor process custody requires its result channel.",
     );
   }
-  const custody = createUpdateDoctorProcessCustody(
+  const statePath = resolveOpenClawStateSqlitePath(resolveCommandEnv({ argv, ...options }));
+  const custody = await createUpdateDoctorProcessCustody(
     context.runId,
     context.root,
     resultPath,
@@ -167,7 +168,16 @@ export async function runUpdateDoctorProcess(
     }
     return outcome.result;
   } finally {
-    custody.close();
+    try {
+      // Doctor's foreign schema writes require cold admission, including retained parent handles.
+      await closeOpenClawStateDatabaseByPathAsync(statePath);
+    } finally {
+      try {
+        revokeSqliteDatabaseAdmissionsForPath(statePath);
+      } finally {
+        custody.close();
+      }
+    }
   }
 }
 

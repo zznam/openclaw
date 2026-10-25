@@ -40,6 +40,11 @@ OpenClaw uses stable per-source roots:
 - Local/path/archive installs are copied or referenced without dependency
   repair.
 
+These roots are durable install state, not caches. Deleting `~/.openclaw/npm` or
+`~/.openclaw/git` removes every installed external plugin; deployment cleanup
+scripts must leave them in place. Superseded plugin generations are retired by
+the Gateway itself.
+
 npm installs run in that per-plugin project root with:
 
 ```bash
@@ -227,6 +232,15 @@ manifests. Runtime dependencies that are not compiled into `dist` must also
 be declared in the root OpenClaw package's `dependencies` or
 `optionalDependencies`, because the root package ships their runtime.
 External plugins keep their runtime dependencies plugin-local.
+
+Source-built Docker images are a composed distribution when
+`OPENCLAW_EXTENSIONS` selects an otherwise external plugin. The frozen install
+first resolves the ordinary root and selected-plugin production trees. Final
+artifact materialization then adds the selected plugins' existing exact runtime
+pins to the distribution manifest and links those installed identities at both
+the root resolution scope and each packaged plugin root. This supports unified
+root chunks without transferring the dependencies into the source plugin or
+running another install; incompatible existing root bindings fail closed.
 
 Package verification uses build-generated
 `dist/runtime-dependency-ownership.json` to identify chunks used only by

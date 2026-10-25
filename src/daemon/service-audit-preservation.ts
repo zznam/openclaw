@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
+import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
+import { isSecretEgressProxyEnv } from "../secrets/egress-proxy/environment.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import { readServiceHeapExecArgv, resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import type {
@@ -159,6 +160,7 @@ export function auditGatewayInstallPreservation(
     }
     if (
       replacement === value ||
+      isSecretEgressProxyEnv(current.environment ?? {}, key, platform) ||
       managed.has(upper) ||
       upper === "OPENCLAW_SERVICE_MANAGED_ENV_KEYS" ||
       upper === "OPENCLAW_GATEWAY_PORT" ||
@@ -168,9 +170,7 @@ export function auditGatewayInstallPreservation(
     }
     if (upper === "PATH" && replacement !== undefined) {
       const paths = (text: string) =>
-        text
-          .split(platform === "win32" ? ";" : ":")
-          .map((part) => normalizeServicePathEntry(part, platform));
+        text.split(":").map((part) => normalizeServicePathEntry(part, platform));
       if (retains(paths(value), paths(replacement))) {
         continue;
       }

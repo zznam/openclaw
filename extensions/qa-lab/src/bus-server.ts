@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sendLengthFramedJson as writeJson } from "openclaw/plugin-sdk/http-response-runtime";
 import type {
   QaBusPollInput,
   QaBusSearchMessagesInput,
@@ -211,14 +212,7 @@ export async function readQaJsonBody(
   }
 }
 
-export function writeJson(res: ServerResponse, statusCode: number, body: unknown) {
-  const payload = JSON.stringify(body);
-  res.writeHead(statusCode, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(payload),
-  });
-  res.end(payload);
-}
+export { writeJson };
 
 export function writeError(res: ServerResponse, statusCode: number, error: unknown) {
   writeJson(res, statusCode, {
@@ -439,8 +433,9 @@ export async function handleQaBusRequest(params: {
   }
 }
 
-function createQaBusServer(state: QaBusState): Server {
-  return createServer((req, res) => {
+export async function startQaBusServer(params: { state: QaBusState; port?: number }) {
+  const { state } = params;
+  const server = createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
       const handled = await handleQaBusRequest({ req, res, state });
       if (!handled) {
@@ -448,10 +443,6 @@ function createQaBusServer(state: QaBusState): Server {
       }
     });
   });
-}
-
-export async function startQaBusServer(params: { state: QaBusState; port?: number }) {
-  const server = createQaBusServer(params.state);
   await once(server.listen(params.port ?? 0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
