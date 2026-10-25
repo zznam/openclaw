@@ -1,0 +1,34 @@
+diff --git a/expr_sema.go b/expr_sema.go
+--- a/expr_sema.go
++++ b/expr_sema.go
+@@ -325 +325,5 @@
+-		"status": StringType{},
++		"status":              StringType{},
++		"workflow_file_path":  StringType{}, // https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context
++		"workflow_ref":        StringType{},
++		"workflow_repository": StringType{},
++		"workflow_sha":        StringType{},
+diff --git a/expr_sema_test.go b/expr_sema_test.go
+--- a/expr_sema_test.go
++++ b/expr_sema_test.go
+@@ -77,0 +78,20 @@
++			expected: StringType{},
++		},
++		{
++			what:     "job context workflow_repository property",
++			input:    "job.workflow_repository",
++			expected: StringType{},
++		},
++		{
++			what:     "job context workflow_ref property",
++			input:    "job.workflow_ref",
++			expected: StringType{},
++		},
++		{
++			what:     "job context workflow_sha property",
++			input:    "job.workflow_sha",
++			expected: StringType{},
++		},
++		{
++			what:     "job context workflow_file_path property",
++			input:    "job.workflow_file_path",

@@ -70,7 +70,8 @@ describe("check-workflows", () => {
     { version: undefined, tool: "go" },
     { version: "1.7.12", tool: "go" },
     { version: "unknown", tool: "pre-commit" },
-    { version: "v1.7.13-0.20260419144658-011a6d15e749", tool: "installed" },
+    { version: "v1.7.13-0.20260419144658-011a6d15e749", tool: "go" },
+    { version: "openclaw-actionlint-011a6d15e749-ed6121b4d79b", tool: "installed" },
     { version: "1.7.12", tool: "pre-commit", acquireStatus: 1 },
     { version: "1.7.12", tool: "go", lintStatus: 7 },
     { version: "1.7.12", tool: "unavailable", lintStatus: 1 },
@@ -96,17 +97,7 @@ describe("check-workflows", () => {
           'printf "%s\\n" "$*" > "$PINNED_ACTIONLINT_MARKER"',
           `exit ${lintStatus}`,
         ]);
-        writeCommand(binDir, "go", [
-          'if [ "$1" = "version" ]; then exit 0; fi',
-          'if [ "$1" = "install" ]; then',
-          '  printf "%s\\n" "$*" > "$GO_FALLBACK_MARKER"',
-          '  printf "%s\\n" "$GOBIN" > "$GO_BIN_MARKER"',
-          `  if [ ${acquireStatus} != 0 ]; then exit ${acquireStatus}; fi`,
-          '  /bin/cp "$PINNED_ACTIONLINT" "$GOBIN/actionlint"',
-          "  exit 0",
-          "fi",
-          "exit 1",
-        ]);
+        writeCommand(binDir, "go", ['if [ "$1" = "version" ]; then exit 0; fi', "exit 1"]);
       }
       if (tool !== "unavailable") {
         writeCommand(binDir, "pre-commit", [
@@ -116,7 +107,19 @@ describe("check-workflows", () => {
         ]);
       }
       for (const command of tool === "unavailable" ? ["node"] : ["python3", "node"]) {
-        writeFileSync(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        if (command === "node" && (tool === "go" || acquireStatus !== 0)) {
+          writeCommand(binDir, command, [
+            'if [ "$1" = "scripts/build-actionlint.mjs" ]; then',
+            '  printf "%s\\n" "$*" > "$GO_FALLBACK_MARKER"',
+            '  printf "%s\\n" "$GOBIN" > "$GO_BIN_MARKER"',
+            `  if [ ${acquireStatus} != 0 ]; then exit ${acquireStatus}; fi`,
+            '  /bin/cp "$PINNED_ACTIONLINT" "$3"',
+            "fi",
+            "exit 0",
+          ]);
+        } else {
+          writeFileSync(path.join(binDir, command), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+        }
       }
 
       const result = spawnSync(testNodeExecPath, ["--import", "tsx", scriptPath], {
@@ -139,7 +142,7 @@ describe("check-workflows", () => {
       expect(existsSync(markerPath)).toBe(acquired);
       if (acquired) {
         expect(readFileSync(markerPath, "utf8")).toContain(
-          "install github.com/rhysd/actionlint/cmd/actionlint@011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7",
+          "scripts/build-actionlint.mjs --build-only",
         );
         expect(existsSync(readFileSync(binMarkerPath, "utf8").trim())).toBe(false);
       } else if (tool === "installed") {
@@ -154,7 +157,7 @@ describe("check-workflows", () => {
         if (tool === "unavailable") {
           expectContains(
             result.stderr,
-            "missing workflow linter: install actionlint built from 011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7",
+            "missing workflow linter: build openclaw-actionlint-011a6d15e749-ed6121b4d79b with scripts/build-actionlint.mjs",
             "Go to acquire that revision, or a pre-commit runtime",
           );
         }

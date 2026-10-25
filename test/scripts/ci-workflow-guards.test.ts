@@ -4144,7 +4144,7 @@ ${step.run}`,
     expect(shellcheckStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
   });
 
-  it("pins workflow and pre-commit actionlint to the large-stdin deadlock fix", () => {
+  it("shares the strict schema builder across workflow and pre-commit actionlint", () => {
     const revision = "011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7";
     const steps: WorkflowStep[] = readWorkflowSanityWorkflow().jobs.actionlint.steps;
     const setupGo = expectDefined(
@@ -4152,15 +4152,40 @@ ${step.run}`,
       "Go setup",
     );
     const install = requiredWorkflowStep(steps, "Install actionlint");
+    const identity = requiredWorkflowStep(steps, "Verify native workflow identity");
+    expect(steps.indexOf(identity)).toBe(0);
+    expect(identity.env).toEqual({
+      JOB_WORKFLOW_REPOSITORY: "${{ job.workflow_repository }}",
+      JOB_WORKFLOW_SHA: "${{ job.workflow_sha }}",
+      EXPECTED_WORKFLOW_REPOSITORY: "${{ github.repository }}",
+      EXPECTED_WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    });
+    for (const [repository, sha, status] of [
+      ["fixture/repository", "a".repeat(40), 0],
+      ["", "a".repeat(40), 1],
+      ["other/repository", "a".repeat(40), 1],
+      ["fixture/repository", "b".repeat(40), 1],
+      ["fixture/repository", "a".repeat(39), 1],
+    ] as const) {
+      const result = runWorkflowShellScript(expectDefined(identity.run, "native identity guard"), {
+        env: {
+          ...process.env,
+          JOB_WORKFLOW_REPOSITORY: repository,
+          JOB_WORKFLOW_SHA: sha,
+          EXPECTED_WORKFLOW_REPOSITORY: "fixture/repository",
+          EXPECTED_WORKFLOW_SHA: "a".repeat(40),
+        },
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(status);
+    }
 
     expect(setupGo.with).toEqual({ "go-version": "1.27.2", cache: false });
     expect(steps.indexOf(setupGo)).toBeLessThan(steps.indexOf(install));
     expectIncludes(install.run, [
-      `ACTIONLINT_REVISION="${revision}"`,
       'export GOBIN="$RUNNER_TEMP/actionlint-bin"',
-      'go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_REVISION}"',
+      'node scripts/build-actionlint.mjs --build-only "$GOBIN/actionlint"',
       '"$GOBIN/actionlint" -version',
-      "v1.7.13-0.20260419144658-${ACTIONLINT_REVISION:0:12}",
+      'expected_version="$(node scripts/build-actionlint.mjs --identity)"',
       'echo "$GOBIN" >> "$GITHUB_PATH"',
     ]);
     const preCommit = readWorkflow(".pre-commit-config.yaml");
@@ -4169,6 +4194,11 @@ ${step.run}`,
         (repo: { repo: string }) => repo.repo === "https://github.com/rhysd/actionlint",
       ).rev,
     ).toBe(revision);
+    expect(
+      preCommit.repos.find(
+        (repo: { repo: string }) => repo.repo === "https://github.com/rhysd/actionlint",
+      ).hooks[0].entry,
+    ).toBe("node scripts/build-actionlint.mjs");
   });
 
   it.each([

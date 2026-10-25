@@ -28,6 +28,23 @@ jobs:
     if: (github.event_name != 'workflow_dispatch')
     runs-on: &linux_runner_ubuntu ubuntu-24.04
     steps:
+      - name: Verify native workflow identity
+        shell: bash
+        env:
+          JOB_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          EXPECTED_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$JOB_WORKFLOW_REPOSITORY" ||
+                "$JOB_WORKFLOW_REPOSITORY" != "$EXPECTED_WORKFLOW_REPOSITORY" ||
+                ! "$JOB_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ||
+                "$JOB_WORKFLOW_SHA" != "$EXPECTED_WORKFLOW_SHA" ]]; then
+            echo "::error::Native job workflow identity is unavailable or differs from this direct workflow." >&2
+            exit 1
+          fi
+
       - &workflow_sanity_checkout_step
         name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -220,13 +237,14 @@ jobs:
         run: |
           set -euo pipefail
           # v1.7.12 writes ShellCheck stdin before starting it and deadlocks on large run blocks.
-          # Pin the upstream fix until a release includes rhysd/actionlint#651.
-          ACTIONLINT_REVISION="011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7"
+          # The shared builder retains #651 and checksum-binds the strict #707 schema fix.
           export GOBIN="$RUNNER_TEMP/actionlint-bin"
-          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_REVISION}"
+          mkdir -p "$GOBIN"
+          node scripts/build-actionlint.mjs --build-only "$GOBIN/actionlint"
           version="$("$GOBIN/actionlint" -version)"
           printf '%s\n' "$version"
-          grep -Fxq "v1.7.13-0.20260419144658-${ACTIONLINT_REVISION:0:12}" <<< "$version"
+          expected_version="$(node scripts/build-actionlint.mjs --identity)"
+          grep -Fxq "$expected_version" <<< "$version"
           echo "$GOBIN" >> "$GITHUB_PATH"
 
       - name: Lint workflows
