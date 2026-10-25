@@ -2,6 +2,7 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import * as ts from "typescript/ast";
 import { isChangedLaneTestPath } from "./changed-lanes.mts";
@@ -150,6 +151,28 @@ function parseArgs(argv: readonly string[]) {
   ]);
 }
 
+function readGitText(gitArgs: string[], cwd: string): string {
+  // Eligible patches and staged source blobs can themselves exceed the
+  // subprocess output buffer. Stream them without dropping regex or AST findings.
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-temp-git-"));
+  try {
+    const outputFile = path.join(temporaryDirectory, "output");
+    const output = fs.openSync(outputFile, "w", 0o600);
+    try {
+      execFileSync("git", gitArgs, {
+        cwd,
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", output, "pipe"],
+      });
+    } finally {
+      fs.closeSync(output);
+    }
+    return fs.readFileSync(outputFile, "utf8");
+  } finally {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
 function readDiff(args: ReturnType<typeof parseArgs>, cwd = process.cwd()): string {
   const base = args.base ?? DEFAULT_BASE_REF;
   let useMergeBase = !args.noMergeBase;
@@ -199,7 +222,10 @@ function readDiff(args: ReturnType<typeof parseArgs>, cwd = process.cwd()): stri
       paths.add(to);
     }
   }
-  return paths.size > 0 ? readGitDiff("--unified=0", "--", ...paths) : "";
+  if (paths.size === 0) {
+    return "";
+  }
+  return readGitText(["--literal-pathspecs", ...diffArgs, "--unified=0", "--", ...paths], cwd);
 }
 
 function readSourceForDiff(
@@ -211,12 +237,7 @@ function readSourceForDiff(
   // unstaged edits and can warn on code that will not be committed.
   try {
     return args.staged
-      ? execFileSync("git", ["show", `:${filePath}`], {
-          cwd,
-          encoding: "utf8",
-          maxBuffer: 64 * 1024 * 1024,
-          stdio: ["ignore", "pipe", "pipe"],
-        })
+      ? readGitText(["show", `:${filePath}`], cwd)
       : fs.readFileSync(path.join(cwd, filePath), "utf8");
   } catch {
     return "";

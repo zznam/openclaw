@@ -176,4 +176,28 @@ describe("report-test-temp-creations", () => {
 
     expect(report("--base", "main", "--head", "feature")).toEqual([finding(file, 1, source)]);
   });
+
+  it("reports findings when an eligible test patch exceeds the subprocess buffer", () => {
+    const { write, git, report } = createGitFixture("openclaw-temp-report-large-test-");
+    git("commit", "--allow-empty", "-q", "-m", "base");
+    const file = "src/large-diff.test.ts";
+    const source = ["const root = fs.", "mkdtemp", 'Sync("case-");'].join("");
+    const helperImport = 'import { makeTempDir } from "../test/helpers/temp-dir.js";';
+    const helperCall = 'const workspace = makeTempDir(tempDirs, "case-");';
+    write(
+      file,
+      Buffer.concat([
+        Buffer.from("//"),
+        Buffer.alloc(65 * 1024 * 1024, "x"),
+        Buffer.from(`\n${helperImport}\n${helperCall}\n${source}\n`),
+      ]),
+    );
+    git("add", file);
+
+    expect(report("--staged")).toEqual([
+      finding(file, 4, source),
+      finding(file, 2, helperImport, "new manual temp-dir helper import"),
+      finding(file, 3, helperCall, "new manual temp-dir helper usage"),
+    ]);
+  });
 });
