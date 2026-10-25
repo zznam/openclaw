@@ -108,7 +108,7 @@ it.for([
         recursive: true,
       });
     }
-    for (const name of ["scripts", "src", "packages", "ui", "node_modules"]) {
+    for (const name of ["scripts", "src", "packages", "ui", "node_modules", "test/helpers"]) {
       fs.symlinkSync(path.join(repoRoot, name), at(name), "junction");
     }
     for (const name of ["package.json", "tsconfig.json"]) {
