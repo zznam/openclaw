@@ -7,7 +7,7 @@ on:
     inputs:
       ref:
         description: Branch, tag, or full commit SHA to validate
-        required: true
+        required: false
         type: string
       target_context_ref:
         description: Optional canonical release branch or tag context for an exact-SHA target
@@ -222,12 +222,44 @@ jobs:
               }
             }
 
+      - name: Bind source to native event commit
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLED_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          CALLED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          REQUESTED_SOURCE_REF: ${{ inputs.ref }}
+          REQUESTED_SOURCE_SHA: ${{ inputs.expected_sha }}
+        with:
+          script: |
+            if (!/^[0-9a-f]{40}$/.test(context.sha ?? "")) {
+              throw new Error("Native workflow event SHA is unavailable.");
+            }
+            if (!/^[0-9a-f]{40}$/.test(process.env.CALLED_WORKFLOW_SHA ?? "") ||
+                !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(process.env.CALLED_WORKFLOW_REPOSITORY ?? "")) {
+              throw new Error("Immutable called workflow identity is unavailable.");
+            }
+            if (context.eventName !== "pull_request") {
+              for (const ref of [process.env.REQUESTED_SOURCE_REF, process.env.REQUESTED_SOURCE_SHA]) {
+                if (!ref) continue;
+                const { data } = await github.rest.repos.getCommit({ ...context.repo, ref });
+                if (data.sha !== context.sha) {
+                  throw new Error("Selected source must equal the native event commit. Dispatch this workflow with --ref at the desired revision instead of selecting a different source through an input.");
+                }
+              }
+            }
+            if (process.env.REQUESTED_HARNESS_SHA && process.env.REQUESTED_HARNESS_SHA !== process.env.CALLED_WORKFLOW_SHA) {
+              throw new Error("Requested harness SHA must equal the immutable called workflow SHA.");
+            }
+            if (process.env.REQUESTED_HARNESS_REPOSITORY && process.env.REQUESTED_HARNESS_REPOSITORY !== process.env.CALLED_WORKFLOW_REPOSITORY) {
+              throw new Error("Requested harness repository must equal the immutable called workflow repository.");
+            }
+
       - name: Report release runner routing
         if: vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'
         run: echo "::notice title=Release runner routing::OPENCLAW_CI_RUNNER_BACKEND=github moves hosted-proven release lanes to ubuntu-24.04; QA Lab runtime-pair stays pinned to Blacksmith and queues during an outage."
       - name: Require trusted workflow ref for release checks
         env:
-          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_REF: ${{ inputs.ref || github.sha }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
@@ -242,7 +274,7 @@ jobs:
 
       - name: Validate ref input
         env:
-          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_REF: ${{ inputs.ref || github.sha }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
           set -euo pipefail
@@ -260,7 +292,7 @@ jobs:
         if: inputs.target_context_ref != ''
         env:
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
-          TARGET_REF: ${{ inputs.ref }}
+          TARGET_REF: ${{ inputs.ref || github.sha }}
         run: |
           set -euo pipefail
           normalized_context_ref="$TARGET_CONTEXT_REF"
@@ -295,7 +327,7 @@ jobs:
         if: steps.trusted_qa_context.outputs.fetch_ref != ''
         env:
           CONTEXT_FETCH_REF: ${{ steps.trusted_qa_context.outputs.fetch_ref }}
-          TARGET_REF: ${{ inputs.ref }}
+          TARGET_REF: ${{ inputs.ref || github.sha }}
           TRUSTED_REPOSITORY_URL: https://github.com/${{ github.repository }}.git
         run: |
           set -euo pipefail
@@ -314,8 +346,8 @@ jobs:
       - name: Fast-resolve selected ref
         id: fast_ref
         env:
-          RELEASE_REF: ${{ inputs.ref }}
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_REF: ${{ inputs.ref || github.sha }}
+          EXPECTED_SHA: ${{ github.event_name != 'pull_request' && github.sha || inputs.expected_sha }}
         run: |
           bash workflow/scripts/github/resolve-openclaw-ref.sh \
             --ref "$RELEASE_REF" \
@@ -328,7 +360,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref }}
+          ref: ${{ github.sha }}
           path: source
           fetch-depth: 0
           filter: blob:none
@@ -345,7 +377,7 @@ jobs:
         if: steps.fast_ref.outputs.fallback == 'true'
         working-directory: source
         env:
-          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_REF: ${{ inputs.ref || github.sha }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -404,7 +436,7 @@ jobs:
         env:
           ADMISSION_TOOLING_ROOT: ${{ github.workspace }}/workflow
           ADMISSION_TOOLING_SHA: ${{ github.sha }}
-          RELEASE_REF_INPUT: ${{ inputs.ref }}
+          RELEASE_REF_INPUT: ${{ inputs.ref || github.sha }}
           RELEASE_PROVIDER_INPUT: ${{ inputs.provider }}
           RELEASE_MODE_INPUT: ${{ inputs.mode }}
           RELEASE_PHASE_INPUT: ${{ inputs.phase }}
@@ -744,7 +776,7 @@ jobs:
       - name: Acquire selected admission source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.ref.outputs.sha }}
+          ref: ${{ github.sha }}
           path: source
           fetch-depth: 1
           filter: blob:none
@@ -836,7 +868,7 @@ jobs:
 
       - name: Summarize validated ref
         env:
-          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_REF: ${{ inputs.ref || github.sha }}
           RELEASE_SHA: ${{ steps.ref.outputs.sha }}
           RELEASE_REF_FAST_PATH: ${{ steps.fast_ref.outputs.fast }}
           RELEASE_PROVIDER: ${{ inputs.provider }}
@@ -1979,14 +2011,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ needs.resolve_target.outputs.revision }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
       - name: Checkout trusted QA Anthropic mock tooling
         if: needs.resolve_target.outputs.trusted_qa_tooling_eligible == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .release-qa-tooling-trusted
           fetch-depth: 1
           fetch-tags: false
@@ -2137,7 +2170,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ needs.resolve_target.outputs.revision }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release artifact resolver
@@ -2271,7 +2304,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ needs.resolve_target.outputs.revision }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
       - name: Setup Node environment
@@ -2587,7 +2620,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ needs.resolve_target.outputs.revision }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release artifact resolver
@@ -2880,7 +2913,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ needs.resolve_target.outputs.revision }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
       - name: Setup Node environment
@@ -2988,7 +3021,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ needs.resolve_target.outputs.revision }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
       - name: Setup Node environment
@@ -3074,7 +3107,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ needs.resolve_target.outputs.revision }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
       - name: Setup Node environment

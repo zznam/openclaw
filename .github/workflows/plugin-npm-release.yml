@@ -57,7 +57,7 @@ on:
           - all-publishable
       ref:
         description: Exact commit SHA reachable from main/release ancestry or the canonical extended-stable branch
-        required: true
+        required: false
         type: string
       dispatch_id:
         description: Optional immutable parent dispatch identity for exact run recovery
@@ -169,6 +169,37 @@ jobs:
               }
             }
 
+      - name: Bind source to native event commit
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLED_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          CALLED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          REQUESTED_SOURCE_REF: ${{ inputs.ref }}
+        with:
+          script: |
+            if (!/^[0-9a-f]{40}$/.test(context.sha ?? "")) {
+              throw new Error("Native workflow event SHA is unavailable.");
+            }
+            if (!/^[0-9a-f]{40}$/.test(process.env.CALLED_WORKFLOW_SHA ?? "") ||
+                !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(process.env.CALLED_WORKFLOW_REPOSITORY ?? "")) {
+              throw new Error("Immutable called workflow identity is unavailable.");
+            }
+            if (context.eventName !== "pull_request") {
+              for (const ref of [process.env.REQUESTED_SOURCE_REF, process.env.REQUESTED_SOURCE_SHA]) {
+                if (!ref) continue;
+                const { data } = await github.rest.repos.getCommit({ ...context.repo, ref });
+                if (data.sha !== context.sha) {
+                  throw new Error("Selected source must equal the native event commit. Dispatch this workflow with --ref at the desired revision instead of selecting a different source through an input.");
+                }
+              }
+            }
+            if (process.env.REQUESTED_HARNESS_SHA && process.env.REQUESTED_HARNESS_SHA !== process.env.CALLED_WORKFLOW_SHA) {
+              throw new Error("Requested harness SHA must equal the immutable called workflow SHA.");
+            }
+            if (process.env.REQUESTED_HARNESS_REPOSITORY && process.env.REQUESTED_HARNESS_REPOSITORY !== process.env.CALLED_WORKFLOW_REPOSITORY) {
+              throw new Error("Requested harness repository must equal the immutable called workflow repository.");
+            }
+
       - name: Prepare Git owner
         uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
@@ -176,7 +207,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           filter: blob:none
 
@@ -184,7 +215,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .release-tooling
           fetch-depth: 1
 
@@ -612,7 +644,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           sparse-checkout: scripts
           persist-credentials: false
 
@@ -693,14 +726,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
       - name: Checkout trusted packaging tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           path: .release-tooling
           fetch-depth: 1
 
@@ -1010,7 +1044,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 1
           sparse-checkout: |
             .github/workflows
@@ -1082,7 +1117,7 @@ jobs:
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
           PUBLISH_TAG: ${{ matrix.plugin.publishTag }}
           REPOSITORY: ${{ github.repository }}
-          SOURCE_REF: ${{ inputs.ref }}
+          SOURCE_REF: ${{ inputs.ref || github.sha }}
           SOURCE_SHA: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
           WORKFLOW_PATH: .github/workflows/plugin-npm-release.yml
           WORKFLOW_REF: ${{ github.workflow_ref }}
@@ -1480,7 +1515,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 1
 
       - name: Setup trusted Node
@@ -1552,7 +1588,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 1
 
       - name: Setup trusted Node
@@ -1623,7 +1660,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 1
           # Publication consumes attested tarballs and the exact source manifest.
           # Keep the workflow policy and its dependency-free verifier closure.
