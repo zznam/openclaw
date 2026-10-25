@@ -133,6 +133,12 @@ export function selectAffectedBoundaryPackages(
     }
   }
 
+  // When every package is selected, prepare the complete SDK and producers once.
+  // Per-package dependency discovery would parse every graph twice without narrowing work.
+  if (extensionIds.length > 0 && reasons.size === extensionIds.length) {
+    return fullSelection(extensionIds, "PR diff selects every extension package");
+  }
+
   return {
     mode: "affected",
     reason: "PR diff: touched packages, SDK smoke sample and direct public-entry consumers",

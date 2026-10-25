@@ -56,6 +56,15 @@ function fixture(overrides: Record<string, string> = {}) {
 }
 
 describe("extension package PR selection", () => {
+  it("uses complete preparation when the PR selects every package", () => {
+    const { select } = fixture();
+    const selection = select(...packages.map((id) => `extensions/${id}/index.ts`));
+    expect(selection.mode).toBe("full");
+    expect(selectedPackages(selection)).toEqual(packages);
+    expect(selection.skipped).toEqual([]);
+    expect(formatBoundarySelection(selection)).toContain("PR diff selects every extension package");
+  });
+
   it("selects touched packages and a bounded smoke set instead of transitive core consumers", () => {
     const { select } = fixture();
     const selection = select("src/current.ts", "extensions/direct/index.ts");
