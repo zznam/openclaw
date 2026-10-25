@@ -488,6 +488,7 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   for (const scriptPath of [
     "packages/normalization-core/src/record-coerce.ts",
     "scripts/check-protocol-since.mts",
+    "scripts/lib/comparison-history.mts",
     "scripts/lib/native-typescript.mts",
     "scripts/lib/repo-root.mjs",
     "scripts/lib/ts-guard-utils.mts",
@@ -514,6 +515,84 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   );
 }
 describe("ci workflow guards", () => {
+  it.skipIf(process.platform === "win32")(
+    "retains protocol introduction trains across history without admitting backdated additions",
+    () => {
+      const topology = createQaProtocolTopology();
+      const { checkout, mainBase, mainHead } = topology;
+      runGit(checkout, ["checkout", "-q", "-b", "historical-import", mainBase]);
+      runGit(checkout, ["config", "user.email", "qa-protocol@example.invalid"]);
+      runGit(checkout, ["config", "user.name", "QA Protocol Fixture"]);
+      runGit(checkout, ["merge", "--no-ff", "-m", "import earlier train", mainHead]);
+      writeJson(path.join(checkout, "package.json"), {
+        name: "qa-protocol-fixture",
+        version: "2026.9.0",
+      });
+      commitProtocolFixture(checkout, "advance release train");
+      runGit(checkout, ["checkout", "-q", "-b", "parallel-earlier-train", mainHead]);
+      writeProtocolDescriptor(checkout, [
+        { name: "sessions.patchMany", since: "2026.8" },
+        { name: "parallel", since: "2026.8" },
+      ]);
+      commitProtocolFixture(checkout, "add method on an older parallel branch");
+      runGit(checkout, ["checkout", "-q", "historical-import"]);
+      runGit(checkout, [
+        "merge",
+        "--no-ff",
+        "-m",
+        "import parallel earlier train",
+        "parallel-earlier-train",
+      ]);
+      const advanced = runGit(checkout, ["rev-parse", "HEAD"]);
+      expectSuccess(runProtocolSinceFixture(checkout, mainBase));
+
+      for (const [methods, message] of [
+        [[{ name: "sessions.patchMany", since: "2026.9" }], 'add since: "2026.8"'],
+        [
+          [
+            { name: "sessions.patchMany", since: "2026.8" },
+            { name: "backdated", since: "2026.8" },
+          ],
+          'add since: "2026.9"',
+        ],
+        [[{ name: "malformed" }], "missing since metadata"],
+      ] as const) {
+        writeProtocolDescriptor(checkout, [...methods]);
+        const result = runProtocolSinceFixture(checkout, mainBase);
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(message);
+      }
+      writeProtocolDescriptor(checkout, [
+        { name: "sessions.patchMany", since: "2026.8" },
+        { name: "current", since: "2026.9" },
+      ]);
+      expectSuccess(runProtocolSinceFixture(checkout, mainBase));
+      expect(runProtocolSinceFixture(checkout, topology.untrusted).status).not.toBe(0);
+
+      for (const rollbackTrain of ["2026.8", "2026.7"]) {
+        runGit(checkout, ["checkout", "-q", "--force", "--detach", advanced]);
+        writeJson(path.join(checkout, "package.json"), {
+          name: "qa-protocol-fixture",
+          version: `${rollbackTrain}.0`,
+        });
+        commitProtocolFixture(checkout, "roll back package version before API addition");
+        writeProtocolDescriptor(checkout, [
+          { name: "sessions.patchMany", since: "2026.8" },
+          { name: "rollback", since: rollbackTrain },
+        ]);
+        commitProtocolFixture(checkout, "attempt backdated API in a separate commit");
+        writeJson(path.join(checkout, "package.json"), {
+          name: "qa-protocol-fixture",
+          version: "2026.9.0",
+        });
+        commitProtocolFixture(checkout, "restore release version");
+        const rollback = runProtocolSinceFixture(checkout, mainBase);
+        expect(rollback.status).not.toBe(0);
+        expect(rollback.stderr).toContain(`rolled back from 2026.9 to ${rollbackTrain}`);
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "drives the protocol vintage guard and rejects untrusted selected revisions",
     () => {

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as ts from "typescript/ast";
+import { requireComparisonHistory } from "./lib/comparison-history.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
@@ -168,10 +169,8 @@ function collectMethodSpecs(sourceFile: ts.SourceFile, fileName: string): Method
   return specs;
 }
 
-function currentTrain(): string {
-  const packageJson: unknown = JSON.parse(
-    fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"),
-  );
+function releaseTrain(source: string): string {
+  const packageJson: unknown = JSON.parse(source);
   if (!isRecord(packageJson)) {
     throw new Error("Root package.json must contain an object.");
   }
@@ -183,9 +182,69 @@ function currentTrain(): string {
   return `${match[1]!}.${match[2]!}`;
 }
 
+function compareTrains(left: string, right: string): number {
+  const [leftYear, leftMonth] = left.split(".").map(Number);
+  const [rightYear, rightMonth] = right.split(".").map(Number);
+  return leftYear! - rightYear! || leftMonth! - rightMonth!;
+}
+
+function releaseTrainHistory(base: string, descriptorCommits: string[]): Map<string, string> {
+  const changes = runGit([
+    "log",
+    "--full-history",
+    "--format=%H %P",
+    `${base}..HEAD`,
+    "--",
+    "package.json",
+  ])
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.trim().split(/\s+/u));
+  const commits = [...new Set([...changes.flat(), ...descriptorCommits])];
+  const result = spawnSync("git", ["cat-file", "--batch"], {
+    cwd: repoRoot,
+    input: commits.map((commit) => `${commit}:package.json\n`).join(""),
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  if (result.error || result.status !== 0) {
+    throw result.error ?? new Error("Could not read package release-train history.");
+  }
+  const trains = new Map<string, string>();
+  let offset = 0;
+  for (const commit of commits) {
+    const end = result.stdout.indexOf(10, offset);
+    const header = result.stdout.subarray(offset, end).toString("utf8");
+    const size = Number(/^[0-9a-f]+ blob (\d+)$/u.exec(header)?.[1]);
+    if (end < 0 || !Number.isSafeInteger(size) || result.stdout[end + 1 + size] !== 10) {
+      throw new Error(
+        `Could not read package.json@${commit}; fetch complete release-train history.`,
+      );
+    }
+    trains.set(
+      commit,
+      releaseTrain(result.stdout.subarray(end + 1, end + 1 + size).toString("utf8")),
+    );
+    offset = end + 2 + size;
+  }
+  // Compare actual parent edges: chronological/topological ordering alone would
+  // mistake an older parallel branch for a rollback on the advancing branch.
+  for (const [commit, ...parents] of changes) {
+    const train = trains.get(commit!)!;
+    for (const parent of parents) {
+      const parentTrain = trains.get(parent)!;
+      if (compareTrains(train, parentTrain) < 0) {
+        throw new Error(
+          `Protocol release train rolled back from ${parentTrain} to ${train} at ${commit}.`,
+        );
+      }
+    }
+  }
+  return trains;
+}
+
 try {
   using parser = createNativeTypeScriptParser({ cwd: repoRoot });
-  const train = currentTrain();
+  const train = releaseTrain(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
   const mergeBase = resolveBaseCommit();
   const currentSource = fs.readFileSync(path.join(repoRoot, descriptorPath), "utf8");
   const currentSpecs = collectMethodSpecs(
@@ -200,12 +259,69 @@ try {
     ).map((s) => s.name),
   );
   const added = currentSpecs.filter((spec) => !baseNames.has(spec.name));
+  // A comparison can span release trains. Committed methods retain the train
+  // from their first declaration; worktree additions still use today's train.
+  const baseTrain = releaseTrain(runGit(["show", `${mergeBase}:package.json`]));
+  const introductions = new Map<string, string>();
+  if (baseTrain !== train) {
+    requireComparisonHistory(repoRoot, mergeBase);
+    const pending = new Set(
+      added.filter((spec) => !spec.compatibilityRestored).map((spec) => spec.name),
+    );
+    const commits = runGit([
+      "log",
+      "--reverse",
+      "--topo-order",
+      "--full-history",
+      "--format=%H",
+      `${mergeBase}..HEAD`,
+      "--",
+      descriptorPath,
+    ])
+      .split(/\s+/u)
+      .filter(Boolean);
+    const trains = releaseTrainHistory(mergeBase, commits);
+    for (const commit of commits) {
+      if (pending.size === 0) {
+        break;
+      }
+      const entry = runGit(["ls-tree", "--name-only", commit, "--", descriptorPath]);
+      if (!entry) {
+        // A deleted descriptor contributes no method introductions.
+        continue;
+      }
+      const source = runGit(["show", `${commit}:${descriptorPath}`]);
+      const specs = collectMethodSpecs(
+        parser.parseSourceFile(descriptorPath, source),
+        `${descriptorPath}@${commit}`,
+      );
+      const introduced = specs.filter((spec) => pending.has(spec.name));
+      if (introduced.length === 0) {
+        continue;
+      }
+      const introducedTrain = trains.get(commit)!;
+      for (const spec of introduced) {
+        if (
+          compareTrains(introducedTrain, baseTrain) < 0 ||
+          compareTrains(introducedTrain, train) > 0
+        ) {
+          throw new Error(
+            `Protocol introduction ${commit} has release train ${introducedTrain} outside ${baseTrain}..${train}.`,
+          );
+        }
+        introductions.set(spec.name, introducedTrain);
+        pending.delete(spec.name);
+      }
+    }
+  }
   const restored = added.filter((spec) => spec.compatibilityRestored);
   const newMethods = added.filter((spec) => !spec.compatibilityRestored);
   // Restored shipped methods retain their historical vintage so discovery and
   // generated clients see the original availability contract, not a new API.
   const violations = added.filter((spec) =>
-    spec.compatibilityRestored ? !spec.since?.startsWith("<=") : spec.since !== train,
+    spec.compatibilityRestored
+      ? !spec.since?.startsWith("<=")
+      : spec.since !== (introductions.get(spec.name) ?? train),
   );
 
   if (violations.length > 0) {
@@ -219,13 +335,13 @@ try {
       console.error(
         spec.compatibilityRestored
           ? `- ${descriptorPath}:${spec.line} ${spec.name} ${problem}; restored compatibility methods must retain <= vintage metadata.`
-          : `- ${descriptorPath}:${spec.line} ${spec.name} ${problem}; add since: ${JSON.stringify(train)}.`,
+          : `- ${descriptorPath}:${spec.line} ${spec.name} ${problem}; add since: ${JSON.stringify(introductions.get(spec.name) ?? train)}.`,
       );
     }
     process.exitCode = 1;
   } else {
     console.log(
-      `protocol since guard passed: ${newMethods.length} new core method${newMethods.length === 1 ? "" : "s"} use train ${train}; ${restored.length} restored compatibility method${restored.length === 1 ? "" : "s"} retain historical vintage`,
+      `protocol since guard passed: ${newMethods.length} new core method${newMethods.length === 1 ? "" : "s"} retain their introduction trains through ${train}; ${restored.length} restored compatibility method${restored.length === 1 ? "" : "s"} retain historical vintage`,
     );
   }
 } catch (error) {
