@@ -515,6 +515,33 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
   );
 }
 describe("ci workflow guards", () => {
+  it("acquires complete metadata only for the three history guard consumers", () => {
+    const workflow = readWorkflow(".github/workflows/ci.yml") as {
+      jobs: Record<string, { steps?: WorkflowStep[] }>;
+    };
+    const consumers = Object.entries(workflow.jobs).flatMap(([job, value]) =>
+      (value.steps ?? [])
+        .filter((entry) => entry.with?.["require-history"] === "true")
+        .map((entry) => ({ job, entry })),
+    );
+    expect(consumers.map(({ job }) => job).toSorted((a, b) => a.localeCompare(b))).toEqual([
+      "checks-baseline-ratchets",
+      "checks-fast-core",
+      "security-fast",
+    ]);
+    for (const { job, entry } of consumers) {
+      expect(entry.uses).toBe("./.ci-harness/.github/actions/ensure-base-commit");
+      const paths = String(entry.with?.["history-paths"]).trim().split(/\s+/u);
+      if (job !== "checks-baseline-ratchets") {
+        expect(paths).toContain("package.json");
+        expect(paths).toContain("src/gateway/methods/core-descriptors.ts");
+      }
+      if (job !== "checks-fast-core") {
+        expect(paths).toContain("config/test-mock-exports-baseline.txt");
+      }
+    }
+  });
+
   it.skipIf(process.platform === "win32")(
     "retains protocol introduction trains across history without admitting backdated additions",
     () => {

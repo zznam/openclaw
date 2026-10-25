@@ -12,6 +12,7 @@ import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const descriptorPath = "src/gateway/methods/core-descriptors.ts";
+const gitEnvironment = { ...process.env, GIT_NO_LAZY_FETCH: "1" };
 
 type MethodSpec = {
   line: number;
@@ -21,7 +22,7 @@ type MethodSpec = {
 };
 
 function runGit(args: string[]): string {
-  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8" });
+  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8", env: gitEnvironment });
   if (result.status !== 0) {
     const detail = result.stderr.trim() || result.stdout.trim() || `git exited ${result.status}`;
     throw new Error(
@@ -32,7 +33,7 @@ function runGit(args: string[]): string {
 }
 
 function tryRunGit(args: string[]): string | undefined {
-  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8" });
+  const result = spawnSync("git", args, { cwd: repoRoot, encoding: "utf8", env: gitEnvironment });
   return result.status === 0 ? result.stdout.trim() : undefined;
 }
 
@@ -203,6 +204,7 @@ function releaseTrainHistory(base: string, descriptorCommits: string[]): Map<str
   const commits = [...new Set([...changes.flat(), ...descriptorCommits])];
   const result = spawnSync("git", ["cat-file", "--batch"], {
     cwd: repoRoot,
+    env: gitEnvironment,
     input: commits.map((commit) => `${commit}:package.json\n`).join(""),
     maxBuffer: 256 * 1024 * 1024,
   });

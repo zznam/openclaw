@@ -1771,6 +1771,19 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - name: Ensure main push guard history
+        if: ${{ !cancelled() && steps.guard_setup.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true' }}
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
+        with:
+          base-sha: *diff_base
+          fetch-ref: ${{ github.event.repository.default_branch }}
+          require-history: "true"
+          policy-ledger-path: config/test-mock-exports-baseline.txt
+          history-paths: |
+            package.json
+            src/gateway/methods/core-descriptors.ts
+            config/test-mock-exports-baseline.txt
+
       - name: Check main push ratchets and protocol additions
         if: ${{ !cancelled() && steps.guard_setup.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true' }}
         env:
@@ -2981,6 +2994,15 @@ jobs:
         if: runner.os == 'Linux'
         uses: ./.ci-harness/.github/actions/setup-ripgrep
 
+      - name: Ensure baseline policy history
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ env.RATCHET_BASE_REF || needs.preflight.outputs.diff_base_revision }}
+          fetch-ref: ${{ github.event.repository.default_branch }}
+          require-history: "true"
+          policy-ledger-path: config/test-mock-exports-baseline.txt
+          history-paths: config/test-mock-exports-baseline.txt
+
       - name: Run baseline ratchets
         env:
           RATCHET_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
@@ -3087,6 +3109,17 @@ jobs:
           install-bun: ${{ matrix.task == 'bun-launcher' && 'true' || 'false' }}
           dependency-cache: *trusted_dependency_cache
           restore-test-caches: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}
+
+      - name: Ensure protocol introduction history
+        if: matrix.task == 'bundled-protocol'
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
+        with:
+          base-sha: *ci_diff_base
+          fetch-ref: ${{ github.event.repository.default_branch }}
+          require-history: "true"
+          history-paths: |
+            package.json
+            src/gateway/methods/core-descriptors.ts
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:

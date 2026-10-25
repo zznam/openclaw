@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeAll, expect, vi } from "vitest";
 import { parse } from "yaml";
+import { requireComparisonHistory } from "../../scripts/lib/comparison-history.mts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 import { readCiCheckoutStep, renderGitTestClock } from "./ci-checkout.test-support.js";
 import { runCiGitStep, type FetchResult } from "./ci-git-owner.test-support.js";
@@ -564,6 +565,218 @@ linuxIt(
     });
     expectReport(report, { code: 0, commands: [] });
     expect(report.githubEnv).toContain("CI_GIT_OWNER=");
+  },
+);
+
+it.for([false, true])(
+  "hydrates only the required historical policy-parent snapshot (denied=%s)",
+  async (denied, { command }) => {
+    const root = command.createTempDir("openclaw-policy-parent-");
+    const origin = join(root, "origin.git");
+    const checkout = join(root, "checkout");
+    const ledger = "config/test-mock-exports-baseline.txt";
+    const oldSource = "export const historical = true;\n";
+    fixtureGit(root, ["init", "--quiet", "--bare", "--initial-branch=main", origin]);
+    fixtureGit(origin, ["config", "uploadpack.allowFilter", "true"]);
+    fixtureGit(
+      origin,
+      ["fast-import", "--quiet"],
+      [
+        importCommit(
+          "refs/heads/main",
+          1,
+          undefined,
+          "old source\n",
+          `M 100644 inline old.ts\ndata ${Buffer.byteLength(oldSource)}\n${oldSource}`,
+        ),
+        importCommit(
+          "refs/heads/main",
+          2,
+          ":1",
+          "policy\n",
+          `M 100644 inline ${ledger}\ndata 8\n#policy\n`,
+        ),
+        importCommit(
+          "refs/heads/feature",
+          3,
+          ":2",
+          "parallel metadata\n",
+          `M 100644 inline ${ledger}\ndata 8\n#branch\n`,
+        ),
+        importCommit(
+          "refs/heads/main",
+          4,
+          ":2",
+          "remove old source\n",
+          `D old.ts\nM 100644 inline ${ledger}\ndata 7\n#later\n`,
+        ),
+        importCommit("refs/heads/main", 5, ":4", "merge retaining main metadata\n", "merge :3\n"),
+      ].join(""),
+    );
+    const baseSha = fixtureGit(origin, ["rev-parse", "main~3"]);
+    const policySha = fixtureGit(origin, ["rev-parse", "main~2"]);
+    const branchSha = fixtureGit(origin, ["rev-parse", "feature"]);
+    fixtureGit(root, [
+      "clone",
+      "--quiet",
+      "--filter=blob:none",
+      "--depth=1",
+      pathToFileURL(origin).href,
+      checkout,
+    ]);
+    fixtureGit(checkout, ["fetch", "--quiet", "--unshallow", "--filter=blob:none", "origin"]);
+    const readHistorical = () =>
+      spawnSync("git", ["show", `${baseSha}:old.ts`], {
+        cwd: checkout,
+        encoding: "utf8",
+        env: { ...ancestryGitEnv(), GIT_NO_LAZY_FETCH: "1" },
+      });
+    expect(readHistorical().status).not.toBe(0);
+    const readLedger = () =>
+      spawnSync("git", ["show", `${policySha}:${ledger}`], {
+        cwd: checkout,
+        encoding: "utf8",
+        env: { ...ancestryGitEnv(), GIT_NO_LAZY_FETCH: "1" },
+      });
+    expect(readLedger().status).not.toBe(0);
+    const readBranchLedger = () =>
+      spawnSync("git", ["show", `${branchSha}:${ledger}`], {
+        cwd: checkout,
+        encoding: "utf8",
+        env: { ...ancestryGitEnv(), GIT_NO_LAZY_FETCH: "1" },
+      });
+    expect(readBranchLedger().status).not.toBe(0);
+    if (denied) {
+      fixtureGit(checkout, [
+        "remote",
+        "set-url",
+        "origin",
+        pathToFileURL(join(root, "unavailable.git")).href,
+      ]);
+    }
+    const result = await command.run(
+      "python3",
+      [
+        "-I",
+        "-S",
+        gitOwnerPath,
+        "--policy",
+        join(process.cwd(), ".github/actions/ensure-base-commit/policy.py"),
+      ],
+      {
+        cwd: checkout,
+        encoding: "utf8",
+        env: {
+          ...ancestryGitEnv(),
+          BASE_SHA: baseSha,
+          FETCH_REF: "main",
+          REQUIRE_HISTORY: "true",
+          POLICY_LEDGER_PATH: ledger,
+          HISTORY_PATHS: ledger,
+        },
+      },
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(denied ? 1 : 0);
+    if (denied) {
+      expect(result.stdout).toContain("Could not hydrate historical policy-parent snapshot");
+      expect(readHistorical().status).not.toBe(0);
+    } else {
+      expect(result.stdout).toContain("Historical policy-parent snapshot is available");
+      expect(readHistorical().stdout).toBe(oldSource);
+      expect(readLedger().stdout).toBe("#policy\n");
+      expect(readBranchLedger().stdout).toBe("#branch\n");
+    }
+  },
+);
+
+it.for([false, true])(
+  "acquires complete guard history from shallow tips (denied=%s)",
+  async (denied, { command }) => {
+    const root = command.createTempDir("openclaw-guard-history-");
+    const origin = join(root, "origin.git");
+    const checkout = join(root, "checkout");
+    fixtureGit(root, ["init", "--quiet", "--bare", "--initial-branch=main", origin]);
+    fixtureGit(origin, ["config", "uploadpack.allowFilter", "true"]);
+    fixtureGit(
+      origin,
+      ["fast-import", "--quiet"],
+      [
+        importCommit("refs/heads/main", 1),
+        importCommit("refs/heads/feature", 2, ":1"),
+        importCommit("refs/heads/feature", 3, ":2"),
+        importCommit("refs/heads/main", 4, ":1", "merge feature\n", "merge :3\n"),
+      ].join(""),
+    );
+    const baseSha = fixtureGit(origin, ["rev-parse", "main^1"]);
+    fixtureGit(root, [
+      "clone",
+      "--quiet",
+      "--filter=blob:none",
+      "--depth=2",
+      pathToFileURL(origin).href,
+      checkout,
+    ]);
+    fixtureGit(checkout, ["fetch", "--quiet", "--depth=1", "origin", baseSha]);
+    // Base ancestry alone is insufficient: the imported parent's history is cut.
+    fixtureGit(checkout, ["merge-base", "--is-ancestor", baseSha, "HEAD"]);
+    expect(() => requireComparisonHistory(checkout, baseSha)).toThrow(
+      "Complete comparison history",
+    );
+    if (denied) {
+      fixtureGit(checkout, [
+        "remote",
+        "set-url",
+        "origin",
+        pathToFileURL(join(root, "unavailable.git")).href,
+      ]);
+    }
+    const result = await command.run(
+      "python3",
+      [
+        "-I",
+        "-S",
+        gitOwnerPath,
+        "--policy",
+        join(process.cwd(), ".github/actions/ensure-base-commit/policy.py"),
+      ],
+      {
+        cwd: checkout,
+        encoding: "utf8",
+        env: { ...ancestryGitEnv(), BASE_SHA: baseSha, FETCH_REF: "main", REQUIRE_HISTORY: "true" },
+      },
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(denied ? 1 : 0);
+    if (denied) {
+      expect(result.stdout).toContain("Guard comparison history is incomplete");
+      expect(() => requireComparisonHistory(checkout, baseSha)).toThrow(
+        "Complete comparison history",
+      );
+    } else {
+      expect(result.stdout).toContain("Resolved complete guard comparison history");
+      expect(() => requireComparisonHistory(checkout, baseSha)).not.toThrow();
+      const repeated = await command.run(
+        "python3",
+        [
+          "-I",
+          "-S",
+          gitOwnerPath,
+          "--policy",
+          join(process.cwd(), ".github/actions/ensure-base-commit/policy.py"),
+        ],
+        {
+          cwd: checkout,
+          encoding: "utf8",
+          env: {
+            ...ancestryGitEnv(),
+            BASE_SHA: baseSha,
+            FETCH_REF: "main",
+            REQUIRE_HISTORY: "true",
+          },
+        },
+      );
+      expect(repeated.status).toBe(0);
+      expect(repeated.stdout).toContain("Complete guard comparison history is already available");
+    }
   },
 );
 
