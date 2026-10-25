@@ -7861,11 +7861,38 @@ it("pins trusted Performance Git owners before checkout", () => {
     const job = workflow.jobs[jobId];
     const steps = job.steps as WorkflowStep[];
     const index = steps.findIndex(({ name }) => name === "Prepare Git owner");
-    expect(index).toBe(decision ? 1 : 0);
-    expect(steps[index + 1]?.name).toBe(checkout);
-    if (decision) {
-      expect(steps[index - 1]?.name).toBe(decision);
+    expect(index).toBeGreaterThanOrEqual(0);
+    const beforeGit = steps.slice(0, index);
+    const admissions =
+      jobId === "resolve_target"
+        ? [
+            "Authorize selected-source execution",
+            "Bind source to native event commit",
+            "Bind auxiliary executables to cache scope",
+          ]
+        : [];
+    expect(beforeGit.map(({ name }) => name)).toEqual(decision ? [decision] : admissions);
+    for (const step of beforeGit) {
+      if (step.name !== undefined && admissions.includes(step.name)) {
+        expect(step.uses).toBe("actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3");
+        expect(step.run).toBeUndefined();
+        expect(step.with?.script).toEqual(expect.any(String));
+        // Pre-checkout admissions use captured context and GitHub APIs, never repository code.
+        expect(step.with?.script).not.toMatch(
+          /\brequire\s*\(|\bimport\b|\b(?:spawn|execFile|execSync)\s*\(|\$\{\{/u,
+        );
+      } else {
+        expect(step.uses).toBeUndefined();
+        expect(step.run).toEqual(expect.any(String));
+        expect(step.run).not.toMatch(
+          /\b(?:git|node|bun|pnpm|npm|bash|sh|source|eval|exec)\s|\.\/|scripts\//u,
+        );
+      }
     }
+    if (jobId !== "resolve_target") {
+      expect(Array.isArray(job.needs) ? job.needs : [job.needs]).toContain("resolve_target");
+    }
+    expect(steps[index + 1]?.name).toBe(checkout);
     expect(steps[index]).toEqual({
       name: "Prepare Git owner",
       uses: "openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef",
