@@ -243,6 +243,10 @@ export class SessionOrganizer {
   }
 
   handleSidebarZoneDragOver(event: DragEvent, targetEntry?: string) {
+    const target = event.currentTarget;
+    if (!(target instanceof Element)) {
+      return;
+    }
     if (!this.isSidebarZoneDragCompatible(event.dataTransfer)) {
       return;
     }
@@ -257,7 +261,6 @@ export class SessionOrganizer {
       this.notify();
       return;
     }
-    const target = event.currentTarget as HTMLElement;
     const bounds = target.getBoundingClientRect();
     this.sidebarZoneDropTarget = {
       entry: targetEntry,
@@ -267,7 +270,10 @@ export class SessionOrganizer {
   }
 
   handleSidebarZoneDragLeave(event: DragEvent) {
-    const current = event.currentTarget as HTMLElement;
+    const current = event.currentTarget;
+    if (!(current instanceof Element)) {
+      return;
+    }
     if (event.relatedTarget instanceof Node && current.contains(event.relatedTarget)) {
       return;
     }
@@ -341,7 +347,10 @@ export class SessionOrganizer {
   }
 
   handleSessionListDragLeave(event: DragEvent) {
-    const current = event.currentTarget as HTMLElement;
+    const current = event.currentTarget;
+    if (!(current instanceof Element)) {
+      return;
+    }
     if (!(event.relatedTarget instanceof Node && current.contains(event.relatedTarget))) {
       this.sessionListRemovalDrop = false;
       this.notify();
@@ -431,6 +440,10 @@ export class SessionOrganizer {
     category?: string,
     targetSessionKey?: string,
   ) {
+    const target = event.currentTarget;
+    if (!(target instanceof Element)) {
+      return;
+    }
     const dataTransfer = event.dataTransfer;
     if (
       sidebarSectionDragActive(dataTransfer) &&
@@ -441,7 +454,6 @@ export class SessionOrganizer {
       if (dataTransfer) {
         dataTransfer.dropEffect = "move";
       }
-      const target = event.currentTarget as HTMLElement;
       const bounds = (this.sectionHeaders.get(sectionId) ?? target).getBoundingClientRect();
       const position = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
       this.sidebarSectionDropTarget = { sectionId, position };
@@ -481,7 +493,10 @@ export class SessionOrganizer {
   }
 
   sectionDragLeave(event: DragEvent, sectionId: string, _category?: string) {
-    const current = event.currentTarget as HTMLElement;
+    const current = event.currentTarget;
+    if (!(current instanceof Element)) {
+      return;
+    }
     if (event.relatedTarget instanceof Node && current.contains(event.relatedTarget)) {
       return;
     }
