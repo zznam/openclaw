@@ -14,11 +14,21 @@ rules:
           - pattern-regex: '"(GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|YARN_RC_FILENAME|CC|CXX|CMAKE_C_COMPILER|CMAKE_CXX_COMPILER|RUSTC_WRAPPER|CARGO_BUILD_RUSTC|CARGO_BUILD_RUSTC_WRAPPER|MAKEFLAGS|MFLAGS)"'
           # Reading an inherited value is not an override; enclosing keys still match.
           - pattern-not-inside: resolveEnvironmentValue(...)
+          # clearEnv is a denylist; focus only its value, preserving sibling overrides.
+          - pattern-not-inside:
+              patterns:
+                - pattern: "{ ..., clearEnv: $CLEAR, ... }"
+                - focus-metavariable: $CLEAR
       - patterns:
           - pattern-inside: |
               { ... }
           - pattern-regex: '"(GIT_CONFIG_[A-Z0-9_]+|NPM_CONFIG_[A-Z0-9_]+|CARGO_REGISTRIES_[A-Z0-9_]+|TF_VAR_[A-Z0-9_]+)"'
           - pattern-not-inside: resolveEnvironmentValue(...)
+          # clearEnv is a denylist; focus only its value, preserving sibling overrides.
+          - pattern-not-inside:
+              patterns:
+                - pattern: "{ ..., clearEnv: $CLEAR, ... }"
+                - focus-metavariable: $CLEAR
       - patterns:
           - pattern-either:
               - pattern: |

@@ -1,0 +1,68 @@
+rules:
+  - id: openclaw.web-fetch-or-media-unbounded-response-read
+    languages:
+      - typescript
+      - javascript
+    severity: WARNING
+    message: >
+      Inside the openclaw web-fetch / media / SSRF-guarded fetch family, calling
+      .text() / .json() / .arrayBuffer() / .blob() etc. directly on a Response
+      that may have come from an untrusted (model- or plugin-controlled) URL can
+      OOM the process if the upstream returns a multi-GB body. Use
+      readResponseWithLimit() / readResponseTextSnippet() (which
+      stream-and-bound) instead. A pre-buffer Content-Length check is not
+      sufficient — the upstream can lie or omit Content-Length.
+    metadata:
+      category: security
+      cwe:
+        - CWE-400
+      ghsas:
+        - GHSA-P536-VVPP-9MC8
+        - GHSA-J27P-HQ53-9WGC
+      ghsa: GHSA-P536-VVPP-9MC8
+      advisory-url: https://github.com/openclaw/openclaw/security/advisories/GHSA-P536-VVPP-9MC8
+      detector-bucket: precise
+      source-run: 2026-04-17T07-37-10Z
+      source-rule-id: openclaw.web-fetch-or-media-unbounded-response-read
+    paths:
+      include:
+        - src/web-fetch/**
+        - src/agents/tools/web-fetch*.ts
+        - src/agents/tools/**/web-fetch*.ts
+        - src/plugins/web-fetch-providers*.ts
+        - src/media/**
+        - src/infra/net/**
+    patterns:
+      - pattern-either:
+          - pattern: $RESP.text()
+          - pattern: $RESP.json()
+          - pattern: $RESP.arrayBuffer()
+          - pattern: $RESP.blob()
+          - pattern: $RESP.bytes()
+          - pattern: $RESP.formData()
+      - pattern-not-inside: |
+          readResponseTextSnippet($RESP, ...)
+      - pattern-not-inside: |
+          readResponseWithLimit($RESP, ...)
+      # Native import identity and const bindings prove local Blob ownership.
+      # Bare/shadowed constructor names and mutable aliases remain untrusted.
+      - pattern-not-inside:
+          patterns:
+            - pattern-inside: |
+                import { Blob as $BLOB } from "node:buffer";
+                ...
+            - pattern-inside: |
+                const $RESP = new $BLOB(...);
+                ...
+      - pattern-not-inside:
+          patterns:
+            - pattern-inside: |
+                import { Blob as $BLOB } from "node:buffer";
+                ...
+            - pattern-inside: |
+                const $RESP = $BODY;
+                ...
+            - pattern-inside: |
+                if ($RESP instanceof $BLOB) {
+                  ...
+                }

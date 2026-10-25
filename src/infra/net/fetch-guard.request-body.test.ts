@@ -1,3 +1,4 @@
+import { Blob as NativeBlob } from "node:buffer";
 import { expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard } from "./fetch-guard.js";
 
@@ -39,6 +40,9 @@ it("dispatches fresh bytes from an immutable Blob across redirects and retries",
   }
   expect(fetchImpl).toHaveBeenCalledTimes(4);
   // This is the small, locally constructed Blob fixture, not a network Response.
-  // nosemgrep: security.opengrep.ghsa-p536-vvpp-9mc8.openclaw.web-fetch-or-media-unbounded-response-read
-  expect(await body.text()).toBe(payload);
+  if (body instanceof NativeBlob) {
+    expect(await body.text()).toBe(payload);
+  } else {
+    throw new Error("expected the web Blob fixture to retain native Blob identity");
+  }
 });

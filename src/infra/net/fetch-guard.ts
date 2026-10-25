@@ -1,5 +1,6 @@
 // Guarded fetch runtime enforces SSRF checks, DNS pinning, redirect policy, and
 // trusted proxy modes around provider/network requests.
+import { Blob as NativeBlob } from "node:buffer";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
@@ -647,10 +648,10 @@ async function fetchWithSsrFGuardInternal(
           ? AbortSignal.any([signal, requestController.signal])
           : requestController.signal,
       };
-      if (init.body instanceof Blob) {
+      const body = init.body;
+      if (body instanceof NativeBlob) {
         // Node 24.16–24.19 Blob streams pin the request's async context. Fresh per-hop
         // bytes also avoid Fetch's unused body tee while preserving immutable replay.
-        const body = init.body;
         const headers = new Headers(init.headers);
         if (!headers.has("content-length")) {
           headers.set("content-length", String(body.size));
@@ -660,7 +661,6 @@ async function fetchWithSsrFGuardInternal(
         }
         init.headers = headers;
         // This is the caller's immutable Blob, not an unbounded network Response.
-        // nosemgrep: security.opengrep.ghsa-p536-vvpp-9mc8.openclaw.web-fetch-or-media-unbounded-response-read
         init.body = new Uint8Array(await body.arrayBuffer());
       }
 

@@ -2884,11 +2884,19 @@ rules:
               { ... }
           - pattern-regex: '"(GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|YARN_RC_FILENAME|CC|CXX|CMAKE_C_COMPILER|CMAKE_CXX_COMPILER|RUSTC_WRAPPER|CARGO_BUILD_RUSTC|CARGO_BUILD_RUSTC_WRAPPER|MAKEFLAGS|MFLAGS)"'
           - pattern-not-inside: resolveEnvironmentValue(...)
+          - pattern-not-inside:
+              patterns:
+                - pattern: "{ ..., clearEnv: $CLEAR, ... }"
+                - focus-metavariable: $CLEAR
       - patterns:
           - pattern-inside: |
               { ... }
           - pattern-regex: '"(GIT_CONFIG_[A-Z0-9_]+|NPM_CONFIG_[A-Z0-9_]+|CARGO_REGISTRIES_[A-Z0-9_]+|TF_VAR_[A-Z0-9_]+)"'
           - pattern-not-inside: resolveEnvironmentValue(...)
+          - pattern-not-inside:
+              patterns:
+                - pattern: "{ ..., clearEnv: $CLEAR, ... }"
+                - focus-metavariable: $CLEAR
       - patterns:
           - pattern-either:
               - pattern: |
@@ -3437,6 +3445,8 @@ rules:
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: openclaw.web-fetch-or-media-unbounded-response-read
+      advisory-id: GHSA-P536-VVPP-9MC8
+      source-file: security/opengrep/rules/ghsa-p536-vvpp-9mc8/response-read.yml
     paths:
       include:
         - src/web-fetch/**
@@ -3457,6 +3467,26 @@ rules:
           readResponseTextSnippet($RESP, ...)
       - pattern-not-inside: |
           readResponseWithLimit($RESP, ...)
+      - pattern-not-inside:
+          patterns:
+            - pattern-inside: |
+                import { Blob as $BLOB } from "node:buffer";
+                ...
+            - pattern-inside: |
+                const $RESP = new $BLOB(...);
+                ...
+      - pattern-not-inside:
+          patterns:
+            - pattern-inside: |
+                import { Blob as $BLOB } from "node:buffer";
+                ...
+            - pattern-inside: |
+                const $RESP = $BODY;
+                ...
+            - pattern-inside: |
+                if ($RESP instanceof $BLOB) {
+                  ...
+                }
   - id: ghsa-pfv7-rr5m-qmv6.local-relay-json-endpoint-missing-auth-header-check
     languages:
       - typescript

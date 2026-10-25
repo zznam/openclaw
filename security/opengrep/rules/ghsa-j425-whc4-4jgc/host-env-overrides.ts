@@ -36,3 +36,29 @@ sanitizeHostExecEnv({
 });
 
 export { inheritedValues, directOverrides, copiedOverride };
+
+// Clearing a variable removes its authority rather than overriding host execution.
+const cleared = {
+  // ok: openclaw-dangerous-host-env-override-pivots
+  clearEnv: ["GIT_SSH_COMMAND", ...(enabled ? ["GIT_CONFIG_PARAMETERS"] : [])],
+};
+
+const clearedWithDangerousSibling = {
+  // ok: openclaw-dangerous-host-env-override-pivots
+  clearEnv: ["GIT_CONFIG_PARAMETERS"],
+  env: {
+    // ruleid: openclaw-dangerous-host-env-override-pivots
+    ["GIT_SSH_COMMAND"]: "untrusted",
+  },
+};
+
+// ruleid: openclaw-dangerous-host-env-override-pivots
+sanitizeHostExecEnv({
+  clearEnv: ["GIT_CONFIG_PARAMETERS"],
+  overrides: { GIT_SSH_COMMAND: "untrusted" },
+});
+
+const unsafeAllowlist = {
+  // ruleid: openclaw-dangerous-host-env-override-pivots
+  allowedEnv: ["GIT_CONFIG_PARAMETERS"],
+};
