@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   dispatch:
-    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
+    runs-on: ubuntu-latest
     # id-token proves this repository, event, branch, and run to ClawSweeper's
     # direct queue intake. The job never checks out or executes pull request code.
     permissions:

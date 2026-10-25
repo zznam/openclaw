@@ -54,7 +54,7 @@ jobs:
     if: >-
       github.repository == 'openclaw/openclaw' &&
       (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
-    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
+    runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.base.outputs.sha }}
     steps:
@@ -80,7 +80,7 @@ jobs:
     name: Verify generated PR App permissions
     needs: resolve-base
     if: needs.resolve-base.result == 'success'
-    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -151,7 +151,7 @@ jobs:
             ru,
             sv,
           ]
-    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
+    runs-on: ubuntu-latest
     name: Refresh native ${{ matrix.locale }}
     steps:
       - name: Checkout
@@ -214,7 +214,7 @@ jobs:
       needs.resolve-base.result == 'success' &&
       needs.publisher-preflight.result == 'success' &&
       needs.refresh.result == 'success'
-    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-latest"]') }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

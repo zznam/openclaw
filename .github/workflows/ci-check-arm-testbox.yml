@@ -60,7 +60,7 @@ env:
 jobs:
   admission:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.LOCAL_RUNNER_LABELS || '["ubuntu-24.04"]') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 3
     permissions:
       contents: read
@@ -96,7 +96,7 @@ jobs:
     permissions:
       contents: read
     name: "check-arm"
-    runs-on: ${{ github.event_name == 'pull_request' && 'blacksmith-16vcpu-ubuntu-2404-arm' || needs.admission.outputs.runner }}
+    runs-on: ${{ github.repository != 'openclaw/openclaw' && 'ubuntu-24.04-arm' || (github.event_name == 'pull_request' && 'blacksmith-16vcpu-ubuntu-2404-arm' || needs.admission.outputs.runner) }}
     timeout-minutes: ${{ fromJSON(needs.admission.outputs.minutes || '120') }}
     steps:
       - name: Begin Testbox
