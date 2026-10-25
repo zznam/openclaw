@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -13,6 +14,29 @@ from first_run import role_matches
 from gateway_switch import GatewayOnboardingFixture, GatewaySwitchFixture
 from inline_browser import GatewayFixture
 from stage_onboarding_runtime import stage_onboarding_runtime
+
+
+class GatewayCliTests(unittest.TestCase):
+    def test_read_only_fixture_supports_pairing_polls_and_rejects_service_commands(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            fixture = GatewayFixture(None)
+            try:
+                with patch.dict(os.environ, {"HOME": str(home)}), patch.object(fixture.server_thread, "start"):
+                    fixture.start()
+                cli = home / ".openclaw/bin/openclaw"
+                for arguments, expected in ((["nodes", "pending", "--json"], []),
+                                            (["devices", "list", "--json"], {"pending": []})):
+                    with self.subTest(arguments=arguments):
+                        result = subprocess.run([str(cli), *arguments], capture_output=True, text=True,
+                                                env={"HOME": str(home), "PATH": "/usr/bin:/bin"})
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(json.loads(result.stdout), expected)
+                rejected = subprocess.run([str(cli), "gateway", "start"], capture_output=True, text=True,
+                                          env={"HOME": str(home), "PATH": "/usr/bin:/bin"})
+                self.assertNotEqual(rejected.returncode, 0)
+            finally:
+                fixture.server_close()
 
 
 class GatewayPointerTests(unittest.TestCase):
