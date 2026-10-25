@@ -36,6 +36,12 @@ selected; its required-check identity and repository protection are unchanged.
 See [scope selection](/ci/scope-and-routing/selection#pr-vs-hourly-vs-release)
 for the tier table and owner boundaries.
 
+## Selected-source authorization
+
+Manual and scheduled release, package, smoke, and performance workflows that execute a selected source revision require current repository `write`, `maintain`, or `admin` access before checking out that source. Both the original actor and a rerun actor must qualify. Missing actor information, unknown permissions, and permission-service errors fail closed because these runs can write caches in the default branch's scope. Ordinary pull-request validation keeps its existing admission rules.
+
+GitHub App bot actors without collaborator write access cannot use these selected-source dispatches. Dispatch from an authorized collaborator account; this check does not grant a bot broader access or replace the existing release approval receipts.
+
 ## Hourly main CI
 
 The complete `main` validation tier runs directly from `ci.yml` at minute 23 of each hour.

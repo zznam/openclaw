@@ -148,6 +148,27 @@ jobs:
       matrix: ${{ steps.prepared_plan.outputs.matrix || steps.plan.outputs.matrix }}
       all_matrix: ${{ steps.prepared_plan.outputs.all_matrix || steps.plan.outputs.all_matrix }}
     steps:
+      - name: Authorize selected-source execution
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            if (!context.actor) {
+              throw new Error("Workflow actor is unavailable.");
+            }
+            const actors = new Set([context.actor, process.env.TRIGGERING_ACTOR || context.actor]);
+            for (const username of actors) {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                ...context.repo,
+                username,
+              });
+              if (!["admin", "maintain", "write"].includes(data.permission)) {
+                throw new Error(`Selected-source execution requires repository write access for ${username}.`);
+              }
+            }
+
       - name: Prepare Git owner
         uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 

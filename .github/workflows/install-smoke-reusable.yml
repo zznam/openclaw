@@ -67,6 +67,27 @@ jobs:
       target_sha: ${{ steps.manifest.outputs.target_sha }}
       dockerfile_image: ${{ steps.manifest.outputs.dockerfile_image }}
     steps:
+      - name: Authorize selected-source execution
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            if (!context.actor) {
+              throw new Error("Workflow actor is unavailable.");
+            }
+            const actors = new Set([context.actor, process.env.TRIGGERING_ACTOR || context.actor]);
+            for (const username of actors) {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                ...context.repo,
+                username,
+              });
+              if (!["admin", "maintain", "write"].includes(data.permission)) {
+                throw new Error(`Selected-source execution requires repository write access for ${username}.`);
+              }
+            }
+
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

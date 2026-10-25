@@ -72,6 +72,27 @@ jobs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
       artifact_run_id: ${{ github.run_id }}
     steps:
+      - name: Authorize selected-source execution
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            if (!context.actor) {
+              throw new Error("Workflow actor is unavailable.");
+            }
+            const actors = new Set([context.actor, process.env.TRIGGERING_ACTOR || context.actor]);
+            for (const username of actors) {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                ...context.repo,
+                username,
+              });
+              if (!["admin", "maintain", "write"].includes(data.permission)) {
+                throw new Error(`Selected-source execution requires repository write access for ${username}.`);
+              }
+            }
+
       - &checkout_target
         name: Checkout selected ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
