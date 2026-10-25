@@ -68,6 +68,8 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     try {
       const first = open();
       const firstPid = pid(first);
+      const lockKey = Number.parseInt(randomUUID().replaceAll("-", "").slice(0, 12), 16);
+      run(() => first.prepare("SELECT pg_advisory_lock(?)").get(lockKey));
       close(first);
       vi.advanceTimersByTime(2 * 60_000);
       const borrowed = open();
@@ -77,10 +79,19 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
       expect(get(borrowed, "SELECT 7::int AS value")).toEqual({ value: 7 });
       close(borrowed);
       vi.advanceTimersByTime(3 * 60_000);
-      const backend = await admin.query("SELECT pid FROM pg_stat_activity WHERE pid = $1", [
-        firstPid,
-      ]);
-      expect(backend.rows).toEqual([]);
+      // The fake clock expires the idle bridge; its worker closes PostgreSQL asynchronously.
+      // Acquiring its session lock proves that close completed without polling backend state.
+      await admin.query("BEGIN");
+      try {
+        await admin.query("SET LOCAL lock_timeout = '5s'");
+        await admin.query("SELECT pg_advisory_xact_lock($1)", [lockKey]);
+        const backend = await admin.query("SELECT pid FROM pg_stat_activity WHERE pid = $1", [
+          firstPid,
+        ]);
+        expect(backend.rows).toEqual([]);
+      } finally {
+        await admin.query("ROLLBACK");
+      }
       const reopened = open();
       expect(pid(reopened)).not.toBe(firstPid);
     } finally {
