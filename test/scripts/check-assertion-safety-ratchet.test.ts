@@ -212,7 +212,17 @@ describe("check-assertion-safety-ratchet", () => {
     expect(readBaseline(root, baselinePath)).toEqual(new Map());
   });
 
-  it.each(["direct history", "CI-only fork", "changed fork source", "ambiguous fork history"])(
+  const historicalRenameScenarios = [
+    "direct history",
+    "CI-only fork",
+    "changed fork source",
+    "ambiguous fork history",
+    "shallow direct history",
+    "shallow CI-only fork",
+    "incomplete rename history",
+    "incomplete fork ancestry",
+  ];
+  it.each(historicalRenameScenarios)(
     "verifies committed renames in %s when aggregate detection is exhausted",
     (scenario) => {
       const original =
@@ -229,6 +239,11 @@ describe("check-assertion-safety-ratchet", () => {
         true,
       );
       const common = git(root, ["rev-parse", "HEAD"]).trim();
+      const directHistory = [
+        "direct history",
+        "shallow direct history",
+        "incomplete rename history",
+      ].includes(scenario);
       let ambiguousBase: string | undefined;
       if (scenario === "ambiguous fork history") {
         write(root, "fork-a.txt", "first independent fork commit\n");
@@ -252,7 +267,7 @@ describe("check-assertion-safety-ratchet", () => {
           "-m",
           "opposite merge direction",
         ]).trim();
-      } else if (scenario !== "direct history") {
+      } else if (!directHistory) {
         write(root, "fork-ci.txt", "fork-only runner configuration\n");
         if (scenario === "changed fork source") {
           write(
@@ -265,7 +280,7 @@ describe("check-assertion-safety-ratchet", () => {
         git(root, ["commit", "-m", "fork customization"]);
       }
       const base = ambiguousBase ?? git(root, ["rev-parse", "HEAD"]).trim();
-      if (scenario !== "direct history" && scenario !== "ambiguous fork history") {
+      if (!directHistory && scenario !== "ambiguous fork history") {
         git(root, ["checkout", "-b", "upstream-history", common]);
       }
       git(root, ["config", "diff.renameLimit", "1"]);
@@ -273,6 +288,7 @@ describe("check-assertion-safety-ratchet", () => {
       write(root, baselineFile, "src/renamed[entry].ts\t1\n");
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "actual historical rename"]);
+      const renameCommit = git(root, ["rev-parse", "HEAD"]).trim();
       const destination = path.join(root, "src/renamed[entry].ts");
       fs.appendFileSync(destination, "// later imported change\n");
       for (let index = 0; index < 4; index++) {
@@ -281,7 +297,7 @@ describe("check-assertion-safety-ratchet", () => {
       }
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "later changes exceed the aggregate rename limit"]);
-      if (scenario !== "direct history") {
+      if (!directHistory) {
         git(root, [
           "-c",
           "merge.renameLimit=256",
@@ -294,7 +310,24 @@ describe("check-assertion-safety-ratchet", () => {
       }
       vi.spyOn(console, "error").mockImplementation(() => {});
       vi.spyOn(console, "log").mockImplementation(() => {});
-      const expected = ["changed fork source", "ambiguous fork history"].includes(scenario) ? 1 : 0;
+      if (scenario.startsWith("shallow ") || scenario.startsWith("incomplete ")) {
+        const boundary =
+          scenario === "incomplete rename history"
+            ? renameCommit
+            : scenario === "incomplete fork ancestry"
+              ? base
+              : common;
+        write(root, ".git/shallow", `${boundary}\n`);
+        expect(git(root, ["rev-parse", "--is-shallow-repository"]).trim()).toBe("true");
+      }
+      const expected = [
+        "changed fork source",
+        "ambiguous fork history",
+        "incomplete rename history",
+        "incomplete fork ancestry",
+      ].includes(scenario)
+        ? 1
+        : 0;
       expect(main(root, ["--base", base])).toBe(expected);
       expect(main(root, ["--base", base, "--staged"])).toBe(expected);
       if (expected !== 0) {

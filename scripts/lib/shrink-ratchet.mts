@@ -339,7 +339,18 @@ function committedRatchetRename(
     });
   try {
     git("merge-base", "--is-ancestor", baseRef, "HEAD");
-    if (git("rev-parse", "--is-shallow-repository").trim() === "true") {
+    const shallowPath =
+      process.env.GIT_SHALLOW_FILE ?? git("rev-parse", "--git-path", "shallow").trim();
+    const boundaries = fs.existsSync(path.resolve(root, shallowPath))
+      ? new Set(fs.readFileSync(path.resolve(root, shallowPath), "utf8").trim().split(/\s+/u))
+      : new Set<string>();
+    const completeInterval = (...revisions: string[]) =>
+      !git("rev-list", ...revisions)
+        .trim()
+        .split(/\s+/u)
+        .some((commit) => boundaries.has(commit));
+    // Earlier or unrelated shallow roots do not hide a rename in this interval.
+    if (!completeInterval(`${baseRef}..HEAD`)) {
       return undefined;
     }
     // A committed history cannot vouch for edited worktree/index contents.
@@ -434,7 +445,10 @@ function committedRatchetRename(
         // A fork-only base need not be an ancestor of an imported upstream rename.
         // Its source must still be exactly the source inherited at their common base.
         const common = git("merge-base", "--all", baseRef, parent).trim();
-        if (!/^[0-9a-f]{40,64}$/u.test(common)) {
+        if (
+          !/^[0-9a-f]{40,64}$/u.test(common) ||
+          !completeInterval(baseRef, parent, "--not", common)
+        ) {
           return undefined;
         }
         const inherited = git("rev-parse", "--verify", `${common}:${from}`).trim();
