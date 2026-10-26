@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { collectPackagePatchViolations } from "../../scripts/check-package-patches.mts";
@@ -125,4 +125,24 @@ it.each([
   rmSync(path.join(dir, file));
 
   expect(collectPackagePatchViolations(dir)).toEqual([]);
+});
+
+it("allows only the reviewed actionlint bytes without admitting pnpm patches", () => {
+  const dir = makeRepo();
+  const patchPath = "config/actionlint-job-context.patch";
+  const patch = readFileSync(new URL(`../../${patchPath}`, import.meta.url), "utf8");
+  fixtureFiles(dir).write(patchPath, patch);
+  git(dir, ["add", patchPath]);
+  expect(collectPackagePatchViolations(dir)).toEqual([]);
+
+  writePatches(dir, "pnpm-workspace.yaml", [["unapproved@1.0.0", patchPath]]);
+  expect(collectPackagePatchViolations(dir)).toEqual([
+    violation("pnpm-workspace.yaml", "patchedDependency", `unapproved@1.0.0 -> ${patchPath}`),
+  ]);
+
+  writeFileSync(path.join(dir, "pnpm-workspace.yaml"), "packages:\n  - .\n");
+  fixtureFiles(dir).write(patchPath, `${patch}\nchanged\n`);
+  expect(collectPackagePatchViolations(dir)).toEqual([
+    violation(patchPath, "patchFile", "new package patch file"),
+  ]);
 });

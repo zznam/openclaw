@@ -2,10 +2,12 @@
 
 // Guards pnpm package patches against unapproved additions.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import YAML from "yaml";
+import { ACTIONLINT_PATCH_PATH, PATCH_SHA256 } from "./build-actionlint.mjs";
 import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
@@ -120,6 +122,17 @@ function collectPatchFileViolations(cwd: string, violations: PackagePatchViolati
       continue;
     }
     if (ALLOWED_PATCH_FILES.has(relativePath)) {
+      continue;
+    }
+    // Approved Go validator compatibility patch, not a pnpm dependency patch.
+    // Bind this exception to the builder's exact reviewed bytes; remove both
+    // when upstream actionlint supports the four native job context fields.
+    if (
+      relativePath === ACTIONLINT_PATCH_PATH &&
+      createHash("sha256")
+        .update(fs.readFileSync(path.join(cwd, relativePath)))
+        .digest("hex") === PATCH_SHA256
+    ) {
       continue;
     }
     violations.push({

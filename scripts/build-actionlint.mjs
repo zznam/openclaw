@@ -6,7 +6,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const ACTIONLINT_REVISION = "011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7";
-const PATCH_SHA256 = "ed6121b4d79b689be6c05d8ff8ef43e63c05f52b621f16e30c5f4a87f6d37b75";
+export const ACTIONLINT_PATCH_PATH = "config/actionlint-job-context.patch";
+export const PATCH_SHA256 = "ed6121b4d79b689be6c05d8ff8ef43e63c05f52b621f16e30c5f4a87f6d37b75";
 export const ACTIONLINT_VERSION = `openclaw-actionlint-${ACTIONLINT_REVISION.slice(0, 12)}-${PATCH_SHA256.slice(0, 12)}`;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -38,7 +39,7 @@ function isQualified(binary) {
 export function ensureActionlint() {
   // Upstream PR #707 adds exactly four documented string properties, without
   // weakening unknown-property validation. Its unmerged SHA is not Go-resolvable.
-  const patch = path.join(root, "config/actionlint-job-context.patch");
+  const patch = path.join(root, ACTIONLINT_PATCH_PATH);
   if (createHash("sha256").update(fs.readFileSync(patch)).digest("hex") !== PATCH_SHA256) {
     throw new Error("actionlint schema patch checksum mismatch");
   }

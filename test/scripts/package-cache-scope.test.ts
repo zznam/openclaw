@@ -167,7 +167,7 @@ describe("package execution cache scope", () => {
         "resolved",
         "${{ steps.resolve.outputs.package_source_sha }}",
       ],
-    ]) {
+    ] as const) {
       expect(step(name).uses).toBe(
         "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3",
       );
