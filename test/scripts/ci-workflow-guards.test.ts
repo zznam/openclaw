@@ -6509,13 +6509,22 @@ it("hands this run's signed Linux inputs to the publisher when bundles are alrea
   }
   // The Ubuntu runner's Bash expands an empty array under `set -u`; macOS /bin/bash 3.2 does not.
   const bash = expectDefined(
-    ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/usr/bin/bash", "/bin/bash"].find(
+    [
+      ...(process.env.PATH ?? "")
+        .split(path.delimiter)
+        .filter(Boolean)
+        .map((directory) => path.join(directory, "bash")),
+      "/opt/homebrew/bin/bash",
+      "/usr/local/bin/bash",
+      "/usr/bin/bash",
+      "/bin/bash",
+    ].find(
       (binary) =>
         existsSync(binary) &&
         spawnSync(binary, ["--noprofile", "--norc", "-c", "((BASH_VERSINFO[0] >= 5))"]).status ===
           0,
     ),
-    "Bash 5 (on macOS: brew install bash)",
+    "Bash 5 on PATH or at a standard installation path",
   );
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-linux-publisher-"));
   try {
