@@ -33,6 +33,7 @@ const rebased = { ...comparison, merge_base_commit: { sha: mergeCommit }, status
 
 type Options = {
   policy?: object;
+  repository?: string;
   rollout?: object | null;
   pullRequest?: object;
   comparison?: object | null;
@@ -66,6 +67,7 @@ const fixture = ${JSON.stringify({
       comparison: options.comparison === undefined ? comparison : options.comparison,
       pullRequest: options.pullRequest ?? pullRequest,
       apiError: options.apiError,
+      repository: options.repository ?? "openclaw/openclaw",
     })};
 const requests = [];
 const api = {
@@ -78,7 +80,7 @@ const api = {
 };
 try {
   const result = await securityReviewRollout({
-    api, owner: "openclaw", repo: "openclaw", pullRequest: fixture.pullRequest,
+    api, owner: fixture.repository.split("/")[0], repo: fixture.repository.split("/")[1], pullRequest: fixture.pullRequest,
   });
   console.log(JSON.stringify({ ...result, requests }));
 } catch (error) {
@@ -156,3 +158,34 @@ it("does not convert a GitHub comparison error into an exemption", () => {
   const result = evaluate({ apiError: "comparison" });
   expect(result).toMatchObject({ status: 1, error: "GitHub unavailable" });
 });
+
+const canonicalPolicy = {
+  rollout: { "pull-request": rolloutNumber, repository: "openclaw/openclaw" },
+};
+
+it("enforces fork review without querying the canonical rollout PR", () => {
+  expect(
+    evaluate({ policy: canonicalPolicy, repository: "zznam/openclaw", apiError: "rollout" }),
+  ).toEqual({ status: 0, mode: "enforced", requests: [] });
+});
+
+it("preserves canonical rollout exemptions and fails closed on its API errors", () => {
+  expect(evaluate({ policy: canonicalPolicy })).toEqual({
+    status: 0,
+    mode: "grandfathered",
+    requests: reads,
+  });
+  expect(evaluate({ policy: canonicalPolicy, apiError: "rollout" })).toMatchObject({
+    status: 1,
+    error: "GitHub unavailable",
+  });
+});
+
+it.each(["", "openclaw", "a/b/c", 7, null])(
+  "rejects malformed rollout repository %j",
+  (repository) => {
+    expect(
+      evaluate({ policy: { rollout: { "pull-request": rolloutNumber, repository } } }),
+    ).toMatchObject({ status: 1, requests: [] });
+  },
+);

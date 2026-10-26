@@ -25,8 +25,13 @@ function sha(value, name) {
 
 /** @returns {Promise<{ mode: "inactive" | "grandfathered" | "enforced" }>} */
 export async function securityReviewRollout({ api, owner, repo, pullRequest }) {
-  const { rolloutPullRequest } = loadSecurityReviewPolicy();
-  if (rolloutPullRequest === undefined) {
+  const { rolloutPullRequest, rolloutRepository } = loadSecurityReviewPolicy();
+  // A canonical repository rollout grants no exemption to a fork. Enforce
+  // its real review policy immediately without looking up a foreign PR number.
+  if (
+    rolloutPullRequest === undefined ||
+    (rolloutRepository !== undefined && rolloutRepository !== `${owner}/${repo}`.toLowerCase())
+  ) {
     return { mode: "enforced" };
   }
   const rollout = await api.request(`/repos/${owner}/${repo}/pulls/${rolloutPullRequest}`);

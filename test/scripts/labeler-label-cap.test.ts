@@ -6,7 +6,15 @@ import { expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 
-type WorkflowJob = { steps: Array<{ name?: string; with?: { script?: string } }> };
+type WorkflowJob = {
+  permissions: Record<string, string>;
+  steps: Array<{
+    name?: string;
+    uses?: string;
+    if?: string;
+    with?: { script?: string; [key: string]: unknown };
+  }>;
+};
 
 const workflow = parse(readFileSync(".github/workflows/labeler.yml", "utf8")) as {
   jobs: Record<string, WorkflowJob> & { label: WorkflowJob };
@@ -67,7 +75,7 @@ function labelFixture(labelNames: string[], addError?: Error, execute = executeS
     withEnvAsync({ GITHUB_WORKSPACE: process.cwd() }, () =>
       execute(context, core, github, require),
     );
-  return { run, labels, issues, teams, core };
+  return { run, labels, issues, teams, core, context };
 }
 
 const areaLabels = (count: number) => Array.from({ length: count }, (_, index) => `area: ${index}`);
@@ -110,4 +118,34 @@ it("every label-adding site routes through addLabelsWithinCap", () => {
     .flatMap((step) => (step.with?.script ?? "").split("\n"))
     .filter((line) => !line.trim().startsWith("//") && line.includes("issues.addLabels("));
   expect(rawCalls).toEqual([]);
+});
+
+it("uses repository tokens for fork labels without calling canonical team services", async () => {
+  const fixture = labelFixture([], undefined, executeMaintainerLabel);
+  fixture.context.repo.owner = "zznam";
+  await fixture.run();
+  expect(fixture.teams.getMembershipForUserInOrg).not.toHaveBeenCalled();
+  expect(fixture.issues.addLabels).not.toHaveBeenCalled();
+  const generic = labelFixture([]);
+  generic.context.repo.owner = "zznam";
+  await generic.run();
+  expect(generic.labels).toContain("size: S");
+});
+
+it("keeps canonical App tokens and supplies scoped fork tokens for every labeling job", () => {
+  for (const job of Object.values(workflow.jobs)) {
+    expect(job.permissions.issues).toBe("write");
+    for (const step of job.steps) {
+      if (step.uses?.startsWith("actions/create-github-app-token@")) {
+        expect(step.if).toContain("github.repository == 'openclaw/openclaw'");
+      }
+      for (const key of ["repo-token", "github-token"]) {
+        if (step.with?.[key]) {
+          expect(step.with[key]).toBe(
+            "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token || github.token }}",
+          );
+        }
+      }
+    }
+  }
 });
