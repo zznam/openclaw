@@ -1602,7 +1602,7 @@ jobs:
         with:
           ref: *workflow_sha
           path: .ci-harness
-          sparse-checkout: ".github/actions\n.github/zizmor.yml\nscripts/detect-private-keys.mts\nscripts/ci-production-audit.mjs\nscripts/ci-collect-checks.sh"
+          sparse-checkout: ".github/actions\n.github/zizmor.yml\nscripts/detect-private-keys.mts\nscripts/ci-production-audit.mjs\nscripts/ci-collect-checks.sh\nscripts/prepare-ratchet-history.mts\nscripts/lib/shrink-ratchet.mts\nscripts/lib/type-assertion-guard-scope.mjs"
           persist-credentials: false
 
       - name: Resolve security diff base
