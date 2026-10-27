@@ -581,6 +581,7 @@ process.stdout.write(JSON.stringify([
       fixture.run(extra, {
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,
+        GITHUB_REPOSITORY: linuxRepository,
         WITHDRAWAL_LOOKUPS: lookups,
       });
 

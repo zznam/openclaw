@@ -107,6 +107,22 @@ function gitCommands(report: Awaited<ReturnType<typeof pluginRun>>) {
   return report.commands.filter(({ tool }) => tool === "git").map(({ args }) => args);
 }
 
+posixIt.for([sha, "f".repeat(40)])(
+  "ClawHub binds selected ref to native workflow SHA %s",
+  { timeout: 55_000 },
+  async (nativeSha, { signal }) => {
+    const report = await pluginRun(signal, "clawhub-resolve", {
+      env: { TARGET_REF: "release/fixture", GITHUB_SHA: nativeSha },
+      revisions: { "release/fixture^{commit}": sha, "release/fixture": sha },
+    });
+    expect(report.code, report.output).toBe(nativeSha === sha ? 0 : 125);
+    if (nativeSha !== sha) {
+      expect(report.output).toContain("Git ownership/setup failed (ValueError)");
+      expect(report.githubOutput).toBe("");
+    }
+  },
+);
+
 posixIt.for([
   ["clawhub-resolve", `sha=${sha}\n`],
   ["npm-resolve", `sha=${sha}\n`],

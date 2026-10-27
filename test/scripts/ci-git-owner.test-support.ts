@@ -76,6 +76,7 @@ const defaults: Record<string, string> = {
   CHECKOUT_GIT_COMMITS_JSON: "null",
   GITHUB_EVENT_NAME: "push",
   GITHUB_REPOSITORY: "fixture/checkout",
+  GITHUB_SHA: candidate,
   DEFAULT_BRANCH: "main",
   EVENT_BASE_SHA: base,
   GH_TOKEN: "",
