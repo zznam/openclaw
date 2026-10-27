@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       workflow_ref:
-        description: "Assertion of the called workflow identity: dispatch/call at the desired ref and supply its matching SHA/ref; package_ref independently selects package source"
-        required: true
-        default: main
+        description: "Optional assertion of the called workflow identity; leave blank to use its native SHA. package_ref independently selects package source"
+        required: false
+        default: ""
         type: string
       source:
-        description: Package candidate source
+        description: "Package candidate source; default-branch runs require ref. Other sources require a non-default native --ref."
         required: true
-        default: npm
+        default: ref
         type: choice
         options:
           - npm
@@ -156,12 +156,12 @@ on:
         default: ""
         type: string
       workflow_ref:
-        description: "Assertion of the called workflow identity: dispatch/call at the desired ref and supply its matching SHA/ref; package_ref independently selects package source"
+        description: "Optional assertion of the called workflow identity; leave blank to use its native SHA. package_ref independently selects package source"
         required: false
-        default: main
+        default: ""
         type: string
       source:
-        description: "Package candidate source: npm, ref, url, trusted-url, or artifact"
+        description: "Package candidate source: npm, ref, url, trusted-url, or artifact. Default-branch runs require ref; other sources require a non-default native --ref."
         required: true
         type: string
       package_ref:
@@ -430,14 +430,16 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
   PACKAGE_ARTIFACT_NAME: package-under-test-${{ github.run_id }}-${{ github.run_attempt }}
   TELEGRAM_PLUGIN_REGISTRY_ARTIFACT_NAME: package-acceptance-telegram-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   resolve_package:
     name: Resolve package candidate
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_runner_ubuntu >-
+      ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 60
     outputs:
       tooling_sha: ${{ steps.tooling.outputs.sha }}
@@ -463,8 +465,86 @@ jobs:
       telegram_mode: ${{ steps.profile.outputs.telegram_mode }}
       telegram_scenarios: ${{ steps.profile.outputs.telegram_scenarios }}
     steps:
+      - name: Authorize selected-source execution
+        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            if (!context.actor) {
+              throw new Error("Workflow actor is unavailable.");
+            }
+            const actors = new Set([context.actor, process.env.TRIGGERING_ACTOR || context.actor]);
+            for (const username of actors) {
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                ...context.repo,
+                username,
+              });
+              if (!["admin", "maintain", "write"].includes(data.permission)) {
+                throw new Error(`Selected-source execution requires repository write access for ${username}.`);
+              }
+            }
+
+      - name: Bind source to native event commit
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CALLED_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          CALLED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+        with:
+          script: |
+            if (!/^[0-9a-f]{40}$/.test(context.sha ?? "")) {
+              throw new Error("Native workflow event SHA is unavailable.");
+            }
+            if (!/^[0-9a-f]{40}$/.test(process.env.CALLED_WORKFLOW_SHA ?? "") ||
+                !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(process.env.CALLED_WORKFLOW_REPOSITORY ?? "")) {
+              throw new Error("Immutable called workflow identity is unavailable.");
+            }
+            if (context.eventName !== "pull_request") {
+              for (const ref of [process.env.REQUESTED_SOURCE_REF, process.env.REQUESTED_SOURCE_SHA]) {
+                if (!ref) continue;
+                const { data } = await github.rest.repos.getCommit({ ...context.repo, ref });
+                if (data.sha !== context.sha) {
+                  throw new Error("Selected source must equal the native event commit. Dispatch this workflow with --ref at the desired revision instead of selecting a different source through an input.");
+                }
+              }
+            }
+            if (process.env.REQUESTED_HARNESS_SHA && process.env.REQUESTED_HARNESS_SHA !== process.env.CALLED_WORKFLOW_SHA) {
+              throw new Error("Requested harness SHA must equal the immutable called workflow SHA.");
+            }
+            if (process.env.REQUESTED_HARNESS_REPOSITORY && process.env.REQUESTED_HARNESS_REPOSITORY !== process.env.CALLED_WORKFLOW_REPOSITORY) {
+              throw new Error("Requested harness repository must equal the immutable called workflow repository.");
+            }
+
+      - name: Bind package inputs to default cache scope
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CACHE_SCOPE_STAGE: "declared"
+          PACKAGE_SOURCE_KIND: ${{ inputs.source }}
+          PACKAGE_SOURCE_SHA: ${{ inputs.package_source_sha }}
+        with:
+          script: &package_default_cache_scope |
+            const stage = process.env.CACHE_SCOPE_STAGE;
+            if (!["declared", "known", "resolved"].includes(stage)) {
+              throw new Error("Unknown package cache admission stage.");
+            }
+            const branch = context.payload.repository?.default_branch;
+            if (typeof branch !== "string" || !branch || typeof context.ref !== "string" || !context.ref) {
+              throw new Error("Native package cache scope is unavailable.");
+            }
+            if (context.ref !== `refs/heads/${branch}`) return;
+            if (typeof context.sha !== "string" || !/^[0-9a-f]{40}$/.test(context.sha)) {
+              throw new Error("Native event SHA is unavailable.");
+            }
+            if (process.env.PACKAGE_SOURCE_KIND !== "ref") {
+              throw new Error("Default-branch package execution admits only native ref packing. Artifact and external package bytes cannot be authenticated by self-declared build-info or arbitrary producer metadata. Dispatch with a non-default native --ref to select artifact, npm, url, or trusted-url packages.");
+            }
+            if (stage !== "declared" && process.env.PACKAGE_SOURCE_SHA !== context.sha) {
+              throw new Error("Default-branch package source must equal the native event commit. Dispatch with a non-default native --ref to test a different package source.");
+            }
+
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -473,7 +553,7 @@ jobs:
         id: tooling_identity
         env:
           JOB_CONTEXT: ${{ toJSON(job) }}
-          WORKFLOW_REF: ${{ inputs.workflow_ref }}
+          WORKFLOW_REF: ${{ inputs.workflow_ref || job.workflow_sha }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
@@ -500,14 +580,15 @@ jobs:
           }
           const assertions = new Set([sha, ref]);
           if (validNamedRef) assertions.add(namedRef[1]);
-          if (!assertions.has(process.env.WORKFLOW_REF)) throw new Error(message);
+          if (process.env.WORKFLOW_REF && !assertions.has(process.env.WORKFLOW_REF)) throw new Error(message);
           appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`);
           NODE
 
       - name: Checkout package workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.tooling_identity.outputs.sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 0
           filter: blob:none
           persist-credentials: false
@@ -711,7 +792,7 @@ jobs:
 
       - name: Download package artifact input
         if: inputs.source == 'artifact'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ inputs.artifact_id }}
           path: .artifacts/package-candidate-input
@@ -726,6 +807,16 @@ jobs:
         run: |
           bash scripts/github/resolve-openclaw-ref.sh \
             --ref "$PACKAGE_REF" --github-output "$GITHUB_OUTPUT"
+
+      - name: Bind known package source to default cache scope
+        if: inputs.source == 'ref'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CACHE_SCOPE_STAGE: "known"
+          PACKAGE_SOURCE_KIND: ${{ inputs.source }}
+          PACKAGE_SOURCE_SHA: ${{ steps.known_source.outputs.sha }}
+        with:
+          script: *package_default_cache_scope
 
       - name: Acquire known package source
         if: inputs.source == 'ref'
@@ -869,6 +960,15 @@ jobs:
               exit 1
             }
           fi
+
+      - name: Bind resolved package source to default cache scope
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          CACHE_SCOPE_STAGE: "resolved"
+          PACKAGE_SOURCE_KIND: ${{ inputs.source }}
+          PACKAGE_SOURCE_SHA: ${{ steps.resolve.outputs.package_source_sha }}
+        with:
+          script: *package_default_cache_scope
 
       - name: Plan frozen source admission
         id: frozen_selection
@@ -1070,7 +1170,7 @@ jobs:
           printf 'digest=%s\n' "$(jq -er '.digest' "$RUNNER_TEMP/frozen-admission.json")" >> "$GITHUB_OUTPUT"
 
       - name: Upload frozen admission diagnostic
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: frozen-source-admission-package-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -1081,7 +1181,7 @@ jobs:
 
       - name: Upload package-under-test artifact
         id: upload_package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.PACKAGE_ARTIFACT_NAME }}
           path: |
@@ -1093,7 +1193,7 @@ jobs:
       - name: Upload Telegram prerelease plugin registry artifact
         id: upload_telegram_registry
         if: steps.resolve.outputs.plugin_registry_manifest_sha256 != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ env.TELEGRAM_PLUGIN_REGISTRY_ARTIFACT_NAME }}
           path: .artifacts/package-acceptance-telegram-plugin-registry/
@@ -1142,7 +1242,7 @@ jobs:
           TRUSTED_SOURCE_ID: ${{ inputs.trusted_source_id }}
           SOURCE: ${{ inputs.source }}
           SUITE_PROFILE: ${{ inputs.suite_profile }}
-          WORKFLOW_REF: ${{ inputs.workflow_ref }}
+          WORKFLOW_REF: ${{ inputs.workflow_ref || job.workflow_sha }}
           PUBLISHED_UPGRADE_SURVIVOR_BASELINE: ${{ steps.resolved_admission.outputs.baseline }}
           PUBLISHED_UPGRADE_SURVIVOR_BASELINES: ${{ steps.resolved_admission.outputs.baselines }}
           PUBLISHED_UPGRADE_SURVIVOR_BASELINE_SCOPE: ${{ steps.resolved_admission.outputs.baseline_scope }}
@@ -1180,13 +1280,14 @@ jobs:
   package_integrity:
     name: Package integrity
     needs: resolve_package
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 10
     steps:
       - name: Checkout package workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve_package.outputs.tooling_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -1199,7 +1300,7 @@ jobs:
           install-deps: "true"
 
       - name: Download package-under-test artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.resolve_package.outputs.package_artifact_id }}
           path: .artifacts/docker-e2e-package
@@ -1225,7 +1326,7 @@ jobs:
     name: npm 12 install.sh acceptance
     needs: [resolve_package, package_integrity]
     if: inputs.suite_profile != 'telegram'
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     permissions:
       actions: read
@@ -1234,17 +1335,18 @@ jobs:
       - name: Checkout package workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve_package.outputs.tooling_sha }}
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Setup Node 24
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Download package-under-test artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.resolve_package.outputs.package_artifact_id }}
           path: .artifacts/docker-e2e-package
@@ -1270,7 +1372,7 @@ jobs:
 
       - name: Download prerelease plugin registry artifact
         if: needs.resolve_package.outputs.prepublish_plugin_registry_json != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
           path: .artifacts/prepublish-plugin-registry
@@ -1475,7 +1577,7 @@ jobs:
         package_telegram,
       ]
     if: always()
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 5
     steps:
       - name: Verify package acceptance results

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 // Owns file-backed baselines and the per-file count ratchet lifecycle, including
@@ -13,7 +14,11 @@ const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 const compareEntries = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 
 export function parseRatchetArgs(argv: string[]) {
-  const args: { base?: string; prune: boolean; staged: boolean } = { prune: false, staged: false };
+  const args: { base?: string; mergeBase: boolean; prune: boolean; staged: boolean } = {
+    mergeBase: true,
+    prune: false,
+    staged: false,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--prune") {
@@ -24,6 +29,10 @@ export function parseRatchetArgs(argv: string[]) {
       args.staged = true;
       continue;
     }
+    if (arg === "--no-merge-base") {
+      args.mergeBase = false;
+      continue;
+    }
     if (arg === "--base" && argv[index + 1]) {
       args.base = argv[index + 1];
       index += 1;
@@ -31,15 +40,28 @@ export function parseRatchetArgs(argv: string[]) {
     }
     throw new Error("Unknown or incomplete argument: " + arg);
   }
+  if (!args.mergeBase && !args.base) {
+    throw new Error("--no-merge-base requires --base <prepared-ref>");
+  }
   return args;
 }
 
 function readGitText(root: string, args: string[]) {
-  return execFileSync("git", args, {
-    cwd: root,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ratchet-git-"));
+  const output = path.join(temporary, "stdout");
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(output, "wx", 0o600);
+    // Baseline blobs can exceed execFileSync's pipe limit. Git writes directly
+    // to a file; only a successful command may supply the complete snapshot.
+    execFileSync("git", args, { cwd: root, stdio: ["ignore", descriptor, "ignore"] });
+    return fs.readFileSync(output, "utf8");
+  } finally {
+    if (descriptor !== undefined) {
+      fs.closeSync(descriptor);
+    }
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 }
 
 function resolvesCommit(root: string, ref: string) {
@@ -54,12 +76,26 @@ function resolvesCommit(root: string, ref: string) {
   }
 }
 
-export function resolveRatchetBase(root: string, options: { base?: string; staged: boolean }) {
+export function resolveRatchetBase(
+  root: string,
+  options: { base?: string; staged: boolean; mergeBase?: boolean },
+) {
+  if (options.mergeBase === false && !options.base) {
+    throw new Error("--no-merge-base requires --base <prepared-ref>");
+  }
   const resolved =
     options.base ??
     (options.staged ? ["HEAD"] : ["origin/main", "HEAD"]).find((ref) => resolvesCommit(root, ref));
-  if (!resolved || options.staged) {
-    return resolved ?? null;
+  if (!resolved) {
+    return null;
+  }
+  if (!resolvesCommit(root, resolved)) {
+    throw new Error(`Could not resolve ratchet base ref: ${resolved}`);
+  }
+  // CI owns an immutable comparison commit even when depth-one tips cannot
+  // traverse to it. Only an explicit prepared-base invocation skips ancestry.
+  if (options.staged || options.mergeBase === false) {
+    return resolved;
   }
 
   // Branches own their grandfathered debt from the fork. Comparing against a
@@ -67,7 +103,9 @@ export function resolveRatchetBase(root: string, options: { base?: string; stage
   try {
     return readGitText(root, ["merge-base", "HEAD", resolved]).trim();
   } catch {
-    return resolved;
+    throw new Error(
+      `Could not resolve ratchet merge base for ${resolved}; provide reachable history or --base <prepared-ref> --no-merge-base.`,
+    );
   }
 }
 
@@ -279,6 +317,226 @@ function formatBaseline(counts: ReadonlyMap<string, number>, header: string) {
   return header + entries.join("\n") + (entries.length > 0 ? "\n" : "");
 }
 
+// Aggregate diffs across long imports can exceed Git's rename candidate limit.
+// Follow only apparent new allowances through small committed rename boundaries;
+// never infer identity by hiding competing sources from the aggregate diff.
+function committedRatchetRename(
+  root: string,
+  baseRef: string,
+  staged: boolean,
+  destination: string,
+  baseBaseline: ReadonlyMap<string, number>,
+  sourceRoots: string[],
+  missingObjects?: Set<string>,
+): string | undefined {
+  const git = (...args: string[]) =>
+    execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: GIT_MAX_BUFFER,
+      timeout: 60_000,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+    });
+  try {
+    git("merge-base", "--is-ancestor", baseRef, "HEAD");
+    const shallowPath =
+      process.env.GIT_SHALLOW_FILE ?? git("rev-parse", "--git-path", "shallow").trim();
+    const boundaries = fs.existsSync(path.resolve(root, shallowPath))
+      ? new Set(fs.readFileSync(path.resolve(root, shallowPath), "utf8").trim().split(/\s+/u))
+      : new Set<string>();
+    const completeInterval = (...revisions: string[]) =>
+      !git("rev-list", ...revisions)
+        .trim()
+        .split(/\s+/u)
+        .some((commit) => boundaries.has(commit));
+    // Earlier or unrelated shallow roots do not hide a rename in this interval.
+    if (!completeInterval(`${baseRef}..HEAD`)) {
+      return undefined;
+    }
+    // A committed history cannot vouch for edited worktree/index contents.
+    git(
+      "diff",
+      "--quiet",
+      ...(staged ? ["--cached"] : []),
+      "HEAD",
+      "--",
+      `:(literal)${destination}`,
+    );
+    let tip = "HEAD";
+    let cursor = destination;
+    for (let hop = 0; hop < 16; hop++) {
+      // Discover creation without comparing promised content. The complete
+      // candidate pool is hydrated and verified below before identity is used.
+      const commit = git(
+        "-c",
+        "diff.renameLimit=256",
+        "log",
+        "-1",
+        "--no-renames",
+        "--diff-filter=A",
+        "--format=%H",
+        `${baseRef}..${tip}`,
+        "--",
+        `:(literal)${cursor}`,
+      ).trim();
+      if (!/^[0-9a-f]{40,64}$/u.test(commit)) {
+        return undefined;
+      }
+      const parents = git("show", "--no-renames", "-s", "--format=%P", commit).trim().split(/\s+/u);
+      if (parents.length !== 1 || !parents[0]) {
+        return undefined;
+      }
+      const parent = parents[0];
+      const candidates = git(
+        "diff",
+        "--no-renames",
+        "--diff-filter=AD",
+        "--name-only",
+        "-z",
+        parent,
+        commit,
+        "--",
+        ...sourceRoots,
+      )
+        .split("\0")
+        .filter(Boolean);
+      // At most 256 squared similarity comparisons, even for adversarial history.
+      if (candidates.length > 512) {
+        return undefined;
+      }
+      if (missingObjects) {
+        // Preparation discovers only this verifier's bounded candidate pool.
+        // It grants no allowance; rerun the same verifier after owned hydration.
+        const raw = git(
+          "diff",
+          "--raw",
+          "--no-abbrev",
+          "--no-renames",
+          "--diff-filter=AD",
+          parent,
+          commit,
+          "--",
+          ...sourceRoots,
+        );
+        let missing = false;
+        for (const line of raw.split("\n")) {
+          if (!line.startsWith(":")) {
+            continue;
+          }
+          const fields = line.slice(1).split(/\s+/u);
+          for (const [mode, object] of [
+            [fields[0], fields[2]],
+            [fields[1], fields[3]],
+          ]) {
+            if (
+              typeof object !== "string" ||
+              !/^(100644|100755|120000)$/u.test(mode ?? "") ||
+              !/^[0-9a-f]{40,64}$/u.test(object)
+            ) {
+              continue;
+            }
+            try {
+              git("cat-file", "-e", object);
+            } catch {
+              missingObjects.add(object);
+              missing = true;
+            }
+          }
+        }
+        if (missing) {
+          return undefined;
+        }
+      }
+      const renameArgs = [
+        "-c",
+        "diff.renameLimit=256",
+        "diff",
+        "--name-status",
+        "-z",
+        "--find-renames",
+        parent,
+        commit,
+        "--",
+        ...sourceRoots,
+      ];
+      const fields = git(...renameArgs).split("\0");
+      let from: string | undefined;
+      for (let index = 0; index < fields.length;) {
+        const status = fields[index++];
+        const oldPath = fields[index++];
+        if (status?.startsWith("R") || status?.startsWith("C")) {
+          const newPath = fields[index++];
+          if (status.startsWith("R") && newPath === cursor) {
+            from = oldPath;
+          }
+        }
+      }
+      if (!from) {
+        return undefined; // Additions, copies, and recreation do not carry an allowance.
+      }
+      // If another deleted source can explain the destination, identity is ambiguous.
+      const alternatives = git(...renameArgs, `:(exclude,literal)${from}`).split("\0");
+      for (let index = 0; index < alternatives.length;) {
+        const status = alternatives[index++];
+        index++;
+        if (status?.startsWith("R") || status?.startsWith("C")) {
+          if (alternatives[index++] === cursor) {
+            return undefined;
+          }
+        }
+      }
+      if (baseBaseline.has(from)) {
+        // A fork-only base need not be an ancestor of an imported upstream rename.
+        // Its source must still be exactly the source inherited at their common base.
+        const common = git("merge-base", "--all", baseRef, parent).trim();
+        if (
+          !/^[0-9a-f]{40,64}$/u.test(common) ||
+          !completeInterval(baseRef, parent, "--not", common)
+        ) {
+          return undefined;
+        }
+        const inherited = git("rev-parse", "--verify", `${common}:${from}`).trim();
+        if (git("rev-parse", "--verify", `${baseRef}:${from}`).trim() !== inherited) {
+          return undefined;
+        }
+        const retained = staged
+          ? git("ls-files", "--stage", "-z", "--", `:(literal)${from}`).length > 0
+          : fs.existsSync(path.join(root, from));
+        return retained ? undefined : from;
+      }
+      cursor = from;
+      tip = parent;
+    }
+  } catch {
+    // Missing/ambiguous history is not evidence for transferring an allowance.
+  }
+  return undefined;
+}
+
+// Acquisition only: final admission always runs baselineWithVerifiedRenames again.
+export function missingRatchetRenameObjects(
+  root: string,
+  baseRef: string,
+  baselinePath: string,
+  sourceRoots: string[],
+) {
+  const parse = (source: string) => parseRatchetCounts(source, baselinePath);
+  const reference = loadRatchetReference(root, baseRef, baselinePath, parse);
+  const missing = new Set<string>();
+  if (!reference) {
+    return [];
+  }
+  const current = loadRatchetSnapshot(root, baselinePath, false, parse);
+  const direct = new Set(listRatchetRenames(root, baseRef, false, sourceRoots).map(({ to }) => to));
+  for (const [destination, count] of current) {
+    if (count > (reference.get(destination) ?? 0) && !direct.has(destination)) {
+      committedRatchetRename(root, baseRef, false, destination, reference, sourceRoots, missing);
+    }
+  }
+  return [...missing].toSorted();
+}
+
 function baselineWithVerifiedRenames(
   root: string,
   baseRef: string,
@@ -288,7 +546,20 @@ function baselineWithVerifiedRenames(
   sourceRoots: string[],
 ) {
   const allowed = new Map(baseBaseline);
-  for (const { from, to } of listRatchetRenames(root, baseRef, staged, sourceRoots)) {
+  const renames = listRatchetRenames(root, baseRef, staged, sourceRoots);
+  const directDestinations = new Set(renames.map(({ to }) => to));
+  const claimedSources = new Set(renames.map(({ from }) => from));
+  for (const [to, count] of baseline) {
+    if (count <= (baseBaseline.get(to) ?? 0) || directDestinations.has(to)) {
+      continue;
+    }
+    const from = committedRatchetRename(root, baseRef, staged, to, baseBaseline, sourceRoots);
+    if (from && !claimedSources.has(from)) {
+      renames.push({ from, to });
+      claimedSources.add(from);
+    }
+  }
+  for (const { from, to } of renames) {
     const oldCount = baseBaseline.get(from);
     const newCount = baseline.get(to);
     if (
@@ -350,7 +621,7 @@ export function runPerFileCountRatchet(
       throw new Error("--prune cannot be combined with --staged");
     }
 
-    const baseRef = resolveRatchetBase(root, { base: args.base, staged: args.staged });
+    const baseRef = resolveRatchetBase(root, args);
     const baseBaseline = baseRef
       ? loadRatchetReference(root, baseRef, baselinePath, parseBaseline)
       : null;

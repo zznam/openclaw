@@ -7,13 +7,19 @@ import {
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
+import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
-export type WorkspaceNode =
-  | WorkerWorkspaceManifestEntry
-  | { path: string; type: "directory" }
-  | { path: string; type: "unsupported" }
-  | undefined;
+type ManifestNode = WorkerWorkspaceManifestEntry | { path: string; type: "directory" };
+
+export type WorkspaceNode = ManifestNode | { path: string; type: "unsupported" } | undefined;
+
+type ManifestNodes = ReturnType<typeof manifestNodes>;
+export type WorkspacePreflightInput = {
+  baseNodes: Array<[string, ManifestNode]>;
+  currentNodes: WorkspacePreflightInput["baseNodes"];
+  changedPaths: string[];
+  buildCacheInputs?: string[];
+};
 
 export function sameEntry(left: WorkspaceNode, right: WorkspaceNode): boolean {
   if (left === right) {
@@ -39,14 +45,27 @@ export function sameEntry(left: WorkspaceNode, right: WorkspaceNode): boolean {
 
 export function manifestNodes(manifest: WorkerWorkspaceManifest) {
   const staged = stagedInputDirectoriesFromEntries(manifest.entries);
-  const nodes = new Map<string, Exclude<WorkspaceNode, undefined>>();
+  const retained = buildCacheInputPaths(manifest.buildCacheInputs);
+  const nodes = new Map<string, ManifestNode>();
   for (const directory of manifest.directories ?? []) {
-    if (!isDerivedWorkspacePath(directory, isStagedInputPath(directory, staged))) {
+    if (
+      !isDerivedWorkspacePath(
+        directory,
+        retained.has(directory) || isStagedInputPath(directory, staged),
+        manifest.buildCacheInputs !== undefined,
+      )
+    ) {
       nodes.set(directory, { path: directory, type: "directory" });
     }
   }
   for (const entry of manifest.entries) {
-    if (!isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, staged))) {
+    if (
+      !isDerivedWorkspacePath(
+        entry.path,
+        retained.has(entry.path) || isStagedInputPath(entry.path, staged),
+        manifest.buildCacheInputs !== undefined,
+      )
+    ) {
       nodes.set(entry.path, entry);
     }
   }
@@ -68,8 +87,10 @@ export function changedPaths(
   signal?: AbortSignal,
 ): Set<string> {
   signal?.throwIfAborted();
-  const baseNodes = manifestNodes(base);
-  const currentNodes = manifestNodes(current);
+  return changedNodePaths(manifestNodes(base), manifestNodes(current));
+}
+
+function changedNodePaths(baseNodes: ManifestNodes, currentNodes: ManifestNodes): Set<string> {
   const changed = new Set<string>();
   // Preserve base order followed by newly introduced current paths.
   for (const [entryPath, entry] of baseNodes) {
@@ -85,33 +106,62 @@ export function changedPaths(
   return changed;
 }
 
+/** Immutable source facts live for one apply; every preflight still reads the target afresh. */
+export function prepareWorkspaceReconciliation(
+  base: WorkerWorkspaceManifest,
+  current: WorkerWorkspaceManifest,
+) {
+  const baseNodes = manifestNodes(base);
+  const currentNodes = manifestNodes(current);
+  const changed = changedNodePaths(baseNodes, currentNodes);
+  const inspected = new Set(changed);
+  for (const entryPath of changed) {
+    for (const ancestor of workspacePathAncestors(entryPath)) {
+      inspected.add(ancestor);
+    }
+  }
+  const preflight: WorkspacePreflightInput = {
+    baseNodes: [],
+    currentNodes: [],
+    changedPaths: [...changed],
+    buildCacheInputs:
+      base.buildCacheInputs === undefined && current.buildCacheInputs === undefined
+        ? undefined
+        : [
+            ...buildCacheInputPaths([
+              ...(base.buildCacheInputs ?? []),
+              ...(current.buildCacheInputs ?? []),
+            ]),
+          ],
+  };
+  for (const entryPath of inspected) {
+    const previous = baseNodes.get(entryPath);
+    const next = currentNodes.get(entryPath);
+    if (previous) {
+      preflight.baseNodes.push([entryPath, previous]);
+    }
+    if (next) {
+      preflight.currentNodes.push([entryPath, next]);
+    }
+  }
+  return { baseNodes, currentNodes, changed, preflight };
+}
+
 export function parseChangedWorkspaceResult(
   base: WorkerWorkspaceManifest,
   current: WorkerWorkspaceManifest,
   enforceRecordLimit = true,
 ): { changed: boolean; entries: WorkerWorkspaceManifestEntry[] } {
   const remainingBase = manifestNodes(base);
-  const staged = stagedInputDirectoriesFromEntries(current.entries);
   let recordCount = 0;
-  for (const directory of current.directories ?? []) {
-    if (isDerivedWorkspacePath(directory, isStagedInputPath(directory, staged))) {
-      continue;
-    }
-    const previous = remainingBase.get(directory);
-    if (previous?.type !== "directory") {
-      recordCount += previous ? 2 : 1;
-    }
-    remainingBase.delete(directory);
-  }
   const entries: WorkerWorkspaceManifestEntry[] = [];
-  for (const entry of current.entries) {
-    if (isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, staged))) {
-      continue;
-    }
+  for (const entry of manifestNodes(current).values()) {
     const previous = remainingBase.get(entry.path);
     if (!sameEntry(previous, entry)) {
       recordCount += previous ? 2 : 1;
-      entries.push(entry);
+      if (entry.type !== "directory") {
+        entries.push(entry);
+      }
     }
     remainingBase.delete(entry.path);
   }

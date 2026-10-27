@@ -2,8 +2,9 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { isChangedLaneTestPath } from "./changed-lanes.mts";
 import {
   booleanFlag,
@@ -12,7 +13,7 @@ import {
   stringFlag,
 } from "./lib/arg-utils.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
-import { runAsScript } from "./lib/ts-guard-utils.mts";
+import { runAsScript, toLine } from "./lib/ts-guard-utils.mts";
 
 type TempCreationFinding = {
   file: string;
@@ -21,20 +22,9 @@ type TempCreationFinding = {
   source: string;
 };
 
-type ManualHelperImport = {
-  line: number;
-  source: string;
-};
-
 type AllowNextLine = {
   file: string;
   line: number;
-};
-
-type ScriptIo = {
-  env?: NodeJS.ProcessEnv;
-  stderr?: { write: (text: string) => unknown };
-  stdout?: { write: (text: string) => unknown };
 };
 
 const DEFAULT_BASE_REF = "origin/main";
@@ -161,6 +151,28 @@ function parseArgs(argv: readonly string[]) {
   ]);
 }
 
+function readGitText(gitArgs: string[], cwd: string): string {
+  // Eligible patches and staged source blobs can themselves exceed the
+  // subprocess output buffer. Stream them without dropping regex or AST findings.
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-temp-git-"));
+  try {
+    const outputFile = path.join(temporaryDirectory, "output");
+    const output = fs.openSync(outputFile, "w", 0o600);
+    try {
+      execFileSync("git", gitArgs, {
+        cwd,
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", output, "pipe"],
+      });
+    } finally {
+      fs.closeSync(output);
+    }
+    return fs.readFileSync(outputFile, "utf8");
+  } finally {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
 function readDiff(args: ReturnType<typeof parseArgs>, cwd = process.cwd()): string {
   const base = args.base ?? DEFAULT_BASE_REF;
   let useMergeBase = !args.noMergeBase;
@@ -210,7 +222,10 @@ function readDiff(args: ReturnType<typeof parseArgs>, cwd = process.cwd()): stri
       paths.add(to);
     }
   }
-  return paths.size > 0 ? readGitDiff("--unified=0", "--", ...paths) : "";
+  if (paths.size === 0) {
+    return "";
+  }
+  return readGitText(["--literal-pathspecs", ...diffArgs, "--unified=0", "--", ...paths], cwd);
 }
 
 function readSourceForDiff(
@@ -222,12 +237,7 @@ function readSourceForDiff(
   // unstaged edits and can warn on code that will not be committed.
   try {
     return args.staged
-      ? execFileSync("git", ["show", `:${filePath}`], {
-          cwd,
-          encoding: "utf8",
-          maxBuffer: 64 * 1024 * 1024,
-          stdio: ["ignore", "pipe", "pipe"],
-        })
+      ? readGitText(["show", `:${filePath}`], cwd)
       : fs.readFileSync(path.join(cwd, filePath), "utf8");
   } catch {
     return "";
@@ -244,10 +254,6 @@ function isTempDirHelperImportSpec(filePath: string, specifier: string): boolean
     ? path.posix.normalize(path.posix.join(path.posix.dirname(filePath), normalizedSpecifier))
     : normalizedSpecifier;
   return stripKnownExtension(resolvedPath) === stripKnownExtension(TEMP_DIR_HELPER_PATH);
-}
-
-function lineForNode(sourceFile: ts.SourceFile, node: ts.Node): number {
-  return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
 }
 
 function sourceLineText(sourceFile: ts.SourceFile, line: number): string {
@@ -272,12 +278,12 @@ function nodeOverlapsAddedLine(
   return false;
 }
 
-function collectManualTempDirHelperImports(
-  sourceFile: ts.SourceFile,
+function findManualHelperUsageFindings(
   filePath: string,
-  addedLineNumbers: Set<number> | null = null,
-): { imports: ManualHelperImport[]; localNames: Set<string> } {
-  const imports: ManualHelperImport[] = [];
+  sourceFile: ts.SourceFile,
+  addedLineNumbers: Set<number>,
+): TempCreationFinding[] {
+  const findings: TempCreationFinding[] = [];
   const localNames = new Set<string>();
   for (const statement of sourceFile.statements) {
     if (
@@ -298,37 +304,20 @@ function collectManualTempDirHelperImports(
       localNames.add(element.name.text);
       if (
         importWarningLine === null &&
-        (!addedLineNumbers || nodeOverlapsAddedLine(sourceFile, element, addedLineNumbers))
+        nodeOverlapsAddedLine(sourceFile, element, addedLineNumbers)
       ) {
-        importWarningLine = lineForNode(sourceFile, element);
+        importWarningLine = toLine(sourceFile, element);
       }
     }
     if (importWarningLine !== null) {
-      imports.push({
+      findings.push({
+        file: filePath,
         line: importWarningLine,
+        reason: "new manual temp-dir helper import",
         source: statement.getText(sourceFile).trim().replace(/\s+/gu, " "),
       });
     }
   }
-  return { imports, localNames };
-}
-
-function findManualHelperUsageFindings(
-  filePath: string,
-  sourceFile: ts.SourceFile,
-  addedLineNumbers: Set<number>,
-): TempCreationFinding[] {
-  const { imports, localNames } = collectManualTempDirHelperImports(
-    sourceFile,
-    filePath,
-    addedLineNumbers,
-  );
-  const findings = imports.map((manualImport) => ({
-    file: filePath,
-    line: manualImport.line,
-    reason: "new manual temp-dir helper import",
-    source: manualImport.source,
-  }));
   if (localNames.size === 0) {
     return findings;
   }
@@ -341,9 +330,9 @@ function findManualHelperUsageFindings(
     ) {
       findings.push({
         file: filePath,
-        line: lineForNode(sourceFile, node.expression),
+        line: toLine(sourceFile, node.expression),
         reason: "new manual temp-dir helper usage",
-        source: sourceLineText(sourceFile, lineForNode(sourceFile, node.expression)),
+        source: sourceLineText(sourceFile, toLine(sourceFile, node.expression)),
       });
     }
     node.forEachChild(visit);
@@ -450,11 +439,9 @@ export function collectTempCreationFindingsFromDiff(
   return findings;
 }
 
-async function main(argv?: string[], io?: ScriptIo): Promise<0 | 1> {
-  const args = parseArgs(argv ?? process.argv.slice(2));
-  const stdout = io?.stdout ?? process.stdout;
-  const stderr = io?.stderr ?? process.stderr;
-  const env = io?.env ?? process.env;
+function main(): 0 | 1 {
+  const args = parseArgs(process.argv.slice(2));
+  const { stdout, stderr, env } = process;
   if (args.help) {
     stdout.write(usage());
     return 0;
@@ -488,7 +475,5 @@ async function main(argv?: string[], io?: ScriptIo): Promise<0 | 1> {
 }
 
 runAsScript(import.meta.url, async () => {
-  const exitCode = await main();
-  process.exitCode = exitCode;
-  return exitCode;
+  process.exitCode = main();
 });

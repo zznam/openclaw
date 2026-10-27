@@ -5,6 +5,7 @@ import { parseDocument } from "yaml";
 const policyPath = new URL("../../.github/security-review-policy.yml", import.meta.url);
 /** @type {{
  *   rolloutPullRequest: number | undefined,
+ *   rolloutRepository: string | undefined,
  *   isDependencyManifest: (filename: string) => boolean,
  *   isPackageLockfile: (filename: string) => boolean,
  *   isDependencyFile: (filename: string) => boolean,
@@ -78,12 +79,22 @@ export function loadSecurityReviewPolicy() {
     "rollout",
   ]);
   let rolloutPullRequest;
+  let rolloutRepository;
   if (policy.rollout !== undefined) {
-    const rollout = mapping(policy.rollout, "rollout", ["pull-request"]);
+    const rollout = mapping(policy.rollout, "rollout", ["pull-request", "repository"]);
     if (!Number.isSafeInteger(rollout["pull-request"]) || rollout["pull-request"] <= 0) {
       invalid("rollout.pull-request must be a positive safe integer");
     }
     rolloutPullRequest = rollout["pull-request"];
+    if (rollout.repository !== undefined) {
+      if (
+        typeof rollout.repository !== "string" ||
+        !/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/iu.test(rollout.repository)
+      ) {
+        invalid("rollout.repository must identify an owner/repository");
+      }
+      rolloutRepository = rollout.repository.toLowerCase();
+    }
   }
   const excluded = Object.entries(mapping(policy.exclude, "exclude")).map(([name, value]) => {
     const rule = mapping(value, `exclude.${name}`, ["paths", "case-insensitive"]);
@@ -114,6 +125,7 @@ export function loadSecurityReviewPolicy() {
   const isOtherDependencyFile = paths(dependencies.other, "dependencies.other");
   cachedPolicy = {
     rolloutPullRequest,
+    rolloutRepository,
     isDependencyManifest,
     isPackageLockfile,
     isDependencyFile: (filename) => isPackageLockfile(filename) || isOtherDependencyFile(filename),

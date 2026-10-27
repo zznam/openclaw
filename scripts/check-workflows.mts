@@ -1,15 +1,14 @@
 #!/usr/bin/env node
-// Runs local workflow sanity checks.
 // Uses qualified installed tools, otherwise falls back to pinned hooks where
 // possible, then runs repo-specific workflow guards.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ACTIONLINT_VERSION } from "./build-actionlint.mjs";
 
-const ACTIONLINT_REVISION = "011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7";
-const PRE_COMMIT_VERSION = "4.6.2";
-// pre-commit 4.6.2 declares requires-python >=3.10, so an older interpreter only
+const PRE_COMMIT_VERSION = "4.7.0";
+// pre-commit 4.7.0 declares requires-python >=3.10, so an older interpreter only
 // fails after a venv build and a network pip install.
 const PRE_COMMIT_PYTHON_FLOOR = "3.10";
 const WORKFLOW_DIR = ".github/workflows";
@@ -25,14 +24,13 @@ function hasPinnedActionlint(): boolean {
     return false;
   }
   // Released 1.7.12 can deadlock on Darwin. Only reuse the Go build of our CI
-  // pin; release and unknown local builds do not establish that fix's presence.
+  // pin and strict schema patch; release builds do not establish their presence.
   const version = result.stdout.split(/\r?\n/u, 1)[0]?.trim() ?? "";
-  const revision = /^v\d+\.\d+\.\d+-\d+\.\d{14}-([a-f0-9]{12})$/u.exec(version)?.[1];
-  if (revision === ACTIONLINT_REVISION.slice(0, 12)) {
+  if (version === ACTIONLINT_VERSION) {
     return true;
   }
   console.warn(
-    `[check-workflows] installed actionlint does not match ${ACTIONLINT_REVISION}; using pinned fallback.`,
+    `[check-workflows] installed actionlint does not match ${ACTIONLINT_VERSION}; using pinned fallback.`,
   );
   return false;
 }
@@ -94,8 +92,12 @@ function runGoActionlint(files: string[]): boolean {
   let lintFailure: ReturnType<typeof runChecked> = null;
   try {
     const installed = spawnSync(
-      "go",
-      ["install", `github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_REVISION}`],
+      "node",
+      [
+        "scripts/build-actionlint.mjs",
+        "--build-only",
+        join(binDir, process.platform === "win32" ? "actionlint.exe" : "actionlint"),
+      ],
       { stdio: "inherit", env: { ...process.env, GOBIN: binDir } },
     );
     // An unavailable pin can still use a cached hook. Lint diagnostics must stay
@@ -146,23 +148,13 @@ function runPreCommitFromTempVenv(hookArgs: string[]): boolean {
       return false;
     }
     postVenvFailure = runChecked(python, ["-m", "pre_commit", ...hookArgs]);
-    if (postVenvFailure) {
-      return false;
-    }
-    return true;
+    return !postVenvFailure;
   } finally {
     rmSync(venvDir, { force: true, recursive: true });
     if (postVenvFailure) {
       exitWithFailure(postVenvFailure);
     }
   }
-}
-
-function workflowFiles(): string[] {
-  return readdirSync(WORKFLOW_DIR)
-    .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"))
-    .toSorted()
-    .map((file) => join(WORKFLOW_DIR, file));
 }
 
 function runPreCommitHook(hook: string, files: string[]): void {
@@ -185,7 +177,10 @@ function runPreCommitHook(hook: string, files: string[]): void {
   process.exit(1);
 }
 
-const workflows = workflowFiles();
+const workflows = readdirSync(WORKFLOW_DIR)
+  .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"))
+  .toSorted()
+  .map((file) => join(WORKFLOW_DIR, file));
 
 if (hasPinnedActionlint()) {
   run("actionlint", workflows);
@@ -198,7 +193,7 @@ if (hasPinnedActionlint()) {
     runPreCommitHook("actionlint", workflows);
   } else {
     console.error(
-      `[check-workflows] missing workflow linter: install actionlint built from ${ACTIONLINT_REVISION}, Go to acquire that revision, or a pre-commit runtime.`,
+      `[check-workflows] missing workflow linter: build ${ACTIONLINT_VERSION} with scripts/build-actionlint.mjs, Go to acquire that revision, or a pre-commit runtime.`,
     );
     process.exit(1);
   }

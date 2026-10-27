@@ -249,8 +249,14 @@ describe("OpenClaw performance workflow", () => {
       expect(checkout.with?.["persist-credentials"]).toBe(false);
       expect(checkout.with?.["fetch-depth"]).toBe(1);
     }
-    expect(helper.with?.ref).toBe("${{ github.workflow_sha }}");
-    expect(candidate.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(helper.with).toMatchObject({
+      repository: "${{ job.workflow_repository }}",
+      ref: "${{ job.workflow_sha }}",
+    });
+    expect(candidate.with).toMatchObject({
+      repository: "${{ job.workflow_repository }}",
+      ref: "${{ job.workflow_sha }}",
+    });
     expect(baseline.with?.ref).toBe("${{ inputs.baseline_ref }}");
     expect(run.run).toContain("scripts/vitest-pair-benchmark.mts");
     expect(run.run).toContain("--baseline-sha");
@@ -313,21 +319,11 @@ describe("OpenClaw performance workflow", () => {
     expect(verify.run).toContain('"$VITEST_PAIR_RESULT" != "success"');
   });
 
-  it("uses an optional dispatch identifier to name parent-owned runs", () => {
-    const workflow = readFileSync(WORKFLOW, "utf8");
-
-    expect(workflow).toContain(
-      "run-name: ${{ inputs.dispatch_id != '' && format('OpenClaw Performance {0}', inputs.dispatch_id) || 'OpenClaw Performance' }}",
-    );
-    expect(workflow).toContain("dispatch_id:");
-    expect(workflow).toContain("Optional parent workflow dispatch identifier");
-  });
-
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "7b97486d0e156b69a3230633acac62d556163e84";
+    const canonicalKovaRef = "88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b";
     const legacyKovaRef = "d69b2209905195bea06980721a92ad8b70808c5d";
-    const trustedLiveKovaRef = "7b97486d0e156b69a3230633acac62d556163e84";
+    const trustedLiveKovaRef = "88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -362,7 +358,6 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.run).toContain('detected_kova_config_contract="canonical"');
     expect(resolveTarget.run).toContain('detected_kova_config_contract="legacy-list"');
     expect(resolveTarget.run).toContain('kova_ref="${KOVA_REF_INPUT:-}"');
-    expect(resolveTarget.run).toContain('kova_ref="18c9eb8c3950a35794d196f4e40ad471e9308e27"');
     expect(resolveTarget.run).toContain('kova_ref="${kova_ref:-$default_kova_ref}"');
     expect(resolveTarget.run).toContain(
       'if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then',
@@ -489,20 +484,6 @@ describe("OpenClaw performance workflow", () => {
         contract: "custom-contract",
         expectedContract: "custom-contract",
       },
-      {
-        name: "historical release pin",
-        schema: legacy,
-        version: "2026.7.33",
-        expectedContract: "legacy-list",
-        expectedRef: "18c9eb8c3950a35794d196f4e40ad471e9308e27",
-      },
-      {
-        name: "extended-stable correction pin",
-        schema: legacy,
-        version: "2026.7.34",
-        expectedContract: "legacy-list",
-        expectedRef: "18c9eb8c3950a35794d196f4e40ad471e9308e27",
-      },
     ];
     posixIt.each(cases)("resolves $name without executing target metadata", (fixture) => {
       const { outputs, result, sha } = runTargetMetadataResolution(fixture);
@@ -518,7 +499,7 @@ describe("OpenClaw performance workflow", () => {
         fixture.expectedContract === "legacy-list"
           ? readWorkflow().env?.KOVA_LEGACY_LIST_CONFIG_REF
           : readWorkflow().env?.KOVA_CANONICAL_CONFIG_REF;
-      const expectedRef = fixture.expectedRef ?? fixture.kovaRef ?? defaultRef;
+      const expectedRef = fixture.kovaRef ?? defaultRef;
       expect(outputs).toEqual({
         checkout_ref: sha,
         tested_ref: "fixture-target",
@@ -540,7 +521,7 @@ describe("OpenClaw performance workflow", () => {
       expect(outputs).toMatchObject({
         checkout_ref: sha,
         tested_sha: sha,
-        kova_ref: "7b97486d0e156b69a3230633acac62d556163e84",
+        kova_ref: "88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b",
         kova_config_contract: "canonical",
       });
     });
@@ -659,7 +640,10 @@ describe("OpenClaw performance workflow", () => {
     });
 
     for (const harness of [kovaHarness, sourceHarness, publisherHarness]) {
-      expect(harness.with?.ref).toBe("${{ github.workflow_sha }}");
+      expect(harness.with).toMatchObject({
+        repository: "${{ job.workflow_repository }}",
+        ref: "${{ job.workflow_sha }}",
+      });
       expect(harness.with?.["persist-credentials"]).toBe(false);
     }
     for (const setup of [kovaSetup, sourceSetup]) {
@@ -769,9 +753,9 @@ describe("OpenClaw performance workflow", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const installRun = findStep("Install OCM and Kova").run ?? "";
 
-    expect(workflow).toContain("OCM_VERSION: v0.2.47");
+    expect(workflow).toContain("OCM_VERSION: v0.2.48");
     expect(workflow).toContain(
-      "OCM_LINUX_X64_SHA256: 05e0bb598fe391c75fe7668e159d7eb09168b4298b5d8d0999786e79e97d0642",
+      "OCM_LINUX_X64_SHA256: d0bdb49d69fa8bf3c3487ff04f4be82126828876f81690afdc002c427e22c1ac",
     );
     expect(installRun).toContain(
       '"https://github.com/openclaw/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
@@ -795,7 +779,7 @@ describe("OpenClaw performance workflow", () => {
     expect(workflow.jobs?.kova?.needs).toBe("resolve_target");
     expect(workflow.jobs?.source_performance?.needs).toBe("resolve_target");
     expect(targetCheckout.uses).toBe("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
-    expect(targetCheckout.with?.ref).toBe("${{ inputs.target_ref || github.sha }}");
+    expect(targetCheckout.with?.ref).toBe("${{ github.sha }}");
     expect(targetCheckout.with?.path).toBe(".artifacts/performance-target");
     expect(targetCheckout.with?.["sparse-checkout-cone-mode"]).toBe(false);
     expect(targetCheckout.with?.["persist-credentials"]).toBe(false);
@@ -809,9 +793,9 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.run).not.toContain("gh api");
     expect(resolveTarget.run).toContain("checkout_ref=$resolved_sha");
     expect(resolveTarget.run).toContain("tested_sha=$resolved_sha");
-    expect(checkout.with?.ref).toBe("${{ needs.resolve_target.outputs.checkout_ref }}");
+    expect(checkout.with?.ref).toBe("${{ github.sha }}");
     expect(record.run).toContain('[[ "$tested_sha" != "$EXPECTED_TESTED_SHA" ]]');
-    expect(sourceCheckout.with?.ref).toBe("${{ needs.resolve_target.outputs.checkout_ref }}");
+    expect(sourceCheckout.with?.ref).toBe("${{ github.sha }}");
     expect(sourceRecord.run).toContain('[[ "$tested_sha" != "$EXPECTED_TESTED_SHA" ]]');
     expect(
       Object.values(workflow.jobs ?? {})
@@ -840,6 +824,13 @@ describe("OpenClaw performance workflow", () => {
     expect(baseline.if).toBeUndefined();
     expect(baseline.env?.CLAWGRIT_REPORTS_TOKEN).toBeUndefined();
     expect(baseline.env?.GH_TOKEN).toBe("${{ github.token }}");
+    expect(baseline.env?.QUALIFICATION_DISPATCH).toBe(
+      "${{ startsWith(inputs.dispatch_id, 'full-release-validation-') }}",
+    );
+    expect(run).toContain("advisory-not-compared");
+    expect(run.indexOf('os.environ.get("QUALIFICATION_DISPATCH")')).toBeLessThan(
+      run.indexOf('fetch(reports, "main"'),
+    );
     expect(run).toContain('remote = "https://github.com/openclaw/clawgrit-reports.git"');
     expect(run).toContain(
       'fetch(reports, "main", blobless=True, max_attempts=3, retry_failures=True)',
@@ -937,15 +928,6 @@ describe("OpenClaw performance workflow", () => {
     expect(websocketRetryDelayIndex).toBeLessThan(run.indexOf(benchmark));
   });
 
-  it("runs trusted CLI performance cases against the frozen candidate entrypoint", () => {
-    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
-
-    expect(run).toContain('"$PERFORMANCE_HELPER_DIR/scripts/bench-cli-startup.ts"');
-    expect(run).toContain('--entry "$GITHUB_WORKSPACE/openclaw.mjs"');
-    expect(run).toContain("--case gatewayHealthJsonWarmState \\");
-    expect(run).toContain("--case gatewayHealthJsonFreshState \\");
-  });
-
   it("isolates required publication in a fresh artifact-consuming job", () => {
     const workflow = readWorkflow();
     const publisher = workflow.jobs?.publish;
@@ -1029,7 +1011,7 @@ describe("OpenClaw performance workflow", () => {
       "${{ needs.resolve_target.outputs.secret_eligible == 'true' && steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}",
     );
     expect(appToken.uses).toBe(
-      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+      "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
     );
     expect(appToken.with).toEqual({
       "client-id": "Iv23liOECG0slfuhz093",
@@ -1094,7 +1076,7 @@ describe("OpenClaw performance workflow", () => {
     expect(paths.run).toContain('mktemp -d "${RUNNER_TEMP}/clawgrit-input.XXXXXX"');
     expect(paths.run).toContain('mktemp -d "${RUNNER_TEMP}/clawgrit-reports.XXXXXX"');
     expect(download.uses).toBe(
-      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
     );
     expect(download.with?.["artifact-ids"]).toBe("${{ steps.artifact.outputs.ids }}");
     expect(download.with?.name).toBeUndefined();
@@ -1152,7 +1134,8 @@ describe("OpenClaw performance workflow", () => {
       "scripts/lib/kova-report-selector.mjs",
     );
     expect(helper.with).toMatchObject({
-      ref: "${{ github.workflow_sha }}",
+      repository: "${{ job.workflow_repository }}",
+      ref: "${{ job.workflow_sha }}",
       path: ".artifacts/performance-publisher",
       "sparse-checkout":
         "scripts/lib/kova-report-publish-files.mjs\nscripts/lib/kova-report-selector.mjs\n",

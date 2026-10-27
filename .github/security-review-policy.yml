@@ -6,6 +6,7 @@
 # categories, the first matching category supplies the review guidance.
 
 rollout:
+  repository: openclaw/openclaw
   pull-request: 152415
 
 exclude:
