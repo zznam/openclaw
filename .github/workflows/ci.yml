@@ -1773,6 +1773,10 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - name: Install ripgrep for main push ratchets
+        if: ${{ !cancelled() && steps.guard_setup.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true' }}
+        uses: ./.ci-harness/.github/actions/setup-ripgrep
+
       - name: Ensure main push guard history
         if: ${{ !cancelled() && steps.guard_setup.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.OPENCLAW_CI_ON_PUSH != 'true' }}
         uses: ./.ci-harness/.github/actions/ensure-base-commit
@@ -1781,6 +1785,7 @@ jobs:
           fetch-ref: ${{ github.event.repository.default_branch }}
           require-history: "true"
           policy-ledger-path: config/test-mock-exports-baseline.txt
+          ratchet-renames: "true"
           history-paths: |
             package.json
             src/gateway/methods/core-descriptors.ts
