@@ -46,7 +46,7 @@ export function installLineCapToolingFixture(checkout: string) {
   ]) {
     delete env[name];
   }
-  return { env };
+  return { env, origin };
 }
 
 export function createToolingDependencyFixture(root: string, staleAncestor = false) {

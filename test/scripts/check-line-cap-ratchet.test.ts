@@ -188,11 +188,12 @@ it("uses qualified oxlint instead of a stale canonical bin in a code-only worktr
   expect(fs.existsSync(path.join(checkout, "node_modules"))).toBe(false);
 });
 
-it.each(["bin traversal", "bin symlink"])(
+it.each(["bin traversal", "bin symlink", "different repository"])(
   "rejects %s before executing the oxlint CLI",
   (invalid) => {
     const donor = createToolingDependencyFixture(tempDirs.make("openclaw-line-cap-admission-"));
-    const { env } = installLineCapToolingFixture(donor.checkout);
+    const { env, origin } = installLineCapToolingFixture(donor.checkout);
+    git(donor.tooling, "config", "remote.origin.url", origin);
     const root = fixture(2, "warn", [], donor.checkout);
     const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
     donor.writePackage("tsx", "export {};", manifest.devDependencies.tsx);
@@ -210,9 +211,11 @@ it.each(["bin traversal", "bin symlink"])(
     fs.writeFileSync(outside, marker);
     if (invalid === "bin traversal") {
       binManifest.bin.oxlint = "../../outside-cli.mjs";
-    } else {
+    } else if (invalid === "bin symlink") {
       fs.symlinkSync(outside, path.join(pkg, "cli.mjs"), "file");
       binManifest.bin.oxlint = "cli.mjs";
+    } else {
+      git(donor.tooling, "config", "remote.origin.url", "https://github.com/fixture/other.git");
     }
     fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify(binManifest));
     write(root, 3);
@@ -229,7 +232,9 @@ it.each(["bin traversal", "bin symlink"])(
     );
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain(
-      "The oxlint CLI bin must be a file inside its admitted package.",
+      invalid === "different repository"
+        ? "Different repository."
+        : "The oxlint CLI bin must be a file inside its admitted package.",
     );
     expect(result.stdout + result.stderr).not.toContain("UNQUALIFIED OXLINT EXECUTED");
     expect(fs.existsSync(path.join(root, "node_modules"))).toBe(false);
