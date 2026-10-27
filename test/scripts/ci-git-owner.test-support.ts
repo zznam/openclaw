@@ -34,7 +34,10 @@ type Step = {
 };
 type WorkflowTarget = { file: string; job: string; step: string };
 type WorkflowInput = { jobs: Record<string, { steps: Step[] }> };
-type ActionInput = { runs: { steps: (Step & { run: string })[] } };
+type ActionInput = {
+  inputs?: Record<string, { default?: string }>;
+  runs: { steps: (Step & { run: string })[] };
+};
 export type FetchResult = number | "hang" | "cleanup-failure";
 type GitFault = {
   match: string;
@@ -96,12 +99,18 @@ const defaults: Record<string, string> = {
   RATCHET_PR_HEAD_SHA: candidate,
 };
 
-function stepEnvironment(step: Step, supplied: Record<string, string>) {
+function stepEnvironment(step: Step, supplied: Record<string, string>, action?: string) {
   const resolved = { ...defaults, ...supplied };
   for (const [key, value] of Object.entries(step.env ?? {})) {
     if (String(value).startsWith("${{")) {
       if (resolved[key] === undefined) {
-        throw new Error(`Unresolved fixture workflow environment: ${key}`);
+        const input = /^\$\{\{\s*inputs\.([\w-]+)\s*\}\}$/u.exec(String(value))?.[1];
+        const declaredDefault =
+          action && input ? actionInputs.get(action)?.inputs?.[input]?.default : undefined;
+        if (declaredDefault === undefined) {
+          throw new Error(`Unresolved fixture workflow environment: ${key}`);
+        }
+        resolved[key] = declaredDefault;
       }
     } else {
       resolved[key] = String(value);
@@ -240,26 +249,30 @@ export async function runCiGitStep(options: {
       if (options.performance) {
         performanceFixture = preparePerformanceFixture(root, options.performance);
       }
-      env = stepEnvironment(step, {
-        PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
-        CONTENTS_TOKEN: "fixture-contents",
-        HEAD_BRANCH: "automation/locale",
-        BASE_BRANCH: "main",
-        COMMIT_MESSAGE: "fixture",
-        PR_TITLE: "fixture",
-        PR_BODY: "fixture",
-        GENERATED_PATHS: "generated",
-        INVALIDATION_PATHS: "source",
-        OVERLAP_POLICY: "defer",
-        AUTO_MERGE: "false",
-        BASE_SHA: base,
-        BASE_REF: "main",
-        FETCH_REF: "fixture-base",
-        BASE_ACTION_PATH: path.join(actions, "ensure-base-commit"),
-        OWNER_ACTION_PATH: path.join(actions, "git-owner"),
-        ...performanceFixture?.env,
-        ...options.env,
-      });
+      env = stepEnvironment(
+        step,
+        {
+          PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
+          CONTENTS_TOKEN: "fixture-contents",
+          HEAD_BRANCH: "automation/locale",
+          BASE_BRANCH: "main",
+          COMMIT_MESSAGE: "fixture",
+          PR_TITLE: "fixture",
+          PR_BODY: "fixture",
+          GENERATED_PATHS: "generated",
+          INVALIDATION_PATHS: "source",
+          OVERLAP_POLICY: "defer",
+          AUTO_MERGE: "false",
+          BASE_SHA: base,
+          BASE_REF: "main",
+          FETCH_REF: "fixture-base",
+          BASE_ACTION_PATH: path.join(actions, "ensure-base-commit"),
+          OWNER_ACTION_PATH: path.join(actions, "git-owner"),
+          ...performanceFixture?.env,
+          ...options.env,
+        },
+        options.action,
+      );
       const workspace = path.join(root, "workspace");
       if (publisher) {
         publisherFixture = prepareGeneratedPublisherFixture(
