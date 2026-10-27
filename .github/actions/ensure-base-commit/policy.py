@@ -1,8 +1,10 @@
 import os
+import json
+import shlex
 import re
 import subprocess
 import time
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from ci_git_owner import FetchTimeout, GitFailure, git_output, run_git
 
@@ -71,7 +73,10 @@ def hydrate_policy_parent(base):
         parsed = PurePosixPath(value)
         if parsed.is_absolute() or ".." in parsed.parts or str(parsed) != value:
             raise ValueError("History paths must be canonical relative paths")
-    if not ledger and not paths:
+    renames = os.environ.get("RATCHET_RENAMES", "false")
+    if renames not in ("true", "false"):
+        raise ValueError("ratchet-renames must be true or false")
+    if not ledger and not paths and renames != "true":
         return 0
     pending = set()
     if paths:
@@ -105,6 +110,18 @@ def hydrate_policy_parent(base):
                                      "--no-walk", parent, env=local_git_environment, timeout=remaining)
                 pending.update(line[1:] for line in objects.splitlines()
                                if re.fullmatch(r"\?[0-9a-f]{40}", line))
+            if renames == "true":
+                # Fixed frozen closure; Node and its Git readers remain inside
+                # this owner's process group, timeout, and cancellation drain.
+                preparer = Path(os.environ["BASE_ACTION_PATH"]).resolve().parents[2] / "scripts/prepare-ratchet-history.mts"
+                command = "!exec node " + shlex.quote(str(preparer))
+                planned = json.loads(git_output(os.getcwd(), "-c", "alias.openclaw-ratchet-plan=" + command,
+                    "openclaw-ratchet-plan", base, env=local_git_environment, timeout=remaining))
+                if not isinstance(planned, list) or len(planned) > 8192 or any(
+                    not isinstance(value, str) or not re.fullmatch("[0-9a-f]{40}", value) for value in planned
+                ):
+                    raise ValueError("Invalid bounded ratchet rename object plan")
+                pending.update(planned)
             if not pending:
                 if paths:
                     run_git(os.getcwd(), "log", "--full-history", "--diff-merges=separate", "--no-ext-diff", "--no-textconv", "--format=",

@@ -13,6 +13,9 @@ inputs:
   policy-ledger-path:
     description: Hydrate the pre-policy snapshot when this ledger is absent at the comparison base.
     default: ""
+  ratchet-renames:
+    description: Hydrate bounded historical assertion/timeout rename candidate pools.
+    default: "false"
   history-paths:
     description: Newline-separated metadata paths whose historical blobs the guard reads.
     default: ""
@@ -27,6 +30,7 @@ runs:
         FETCH_REF: ${{ inputs.fetch-ref }}
         REQUIRE_HISTORY: ${{ inputs.require-history }}
         POLICY_LEDGER_PATH: ${{ inputs.policy-ledger-path }}
+        RATCHET_RENAMES: ${{ inputs.ratchet-renames }}
         HISTORY_PATHS: ${{ inputs.history-paths }}
       run: |
         set -euo pipefail

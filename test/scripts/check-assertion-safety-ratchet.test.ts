@@ -1,7 +1,8 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectAssertionSafetyReport as assertionReport,
@@ -11,7 +12,10 @@ import {
   main,
 } from "../../scripts/check-assertion-safety-ratchet.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
-import { parseRatchetCounts } from "../../scripts/lib/shrink-ratchet.mts";
+import {
+  missingRatchetRenameObjects,
+  parseRatchetCounts,
+} from "../../scripts/lib/shrink-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const parser = createNativeTypeScriptParser();
@@ -550,3 +554,90 @@ describe("check-assertion-safety-ratchet", () => {
     expect(report.errors).toHaveLength(1);
   });
 });
+
+it.each([false, true])(
+  "hydrates only bounded rename candidates through the owned preparer (denied=%s)",
+  (denied) => {
+    const original = firstAssertion + "// original\n".repeat(100);
+    const source = fileFixture(
+      {
+        "src/old.ts": original,
+        [baselineFile]: "src/old.ts\t1\n",
+        "config/test-timeout-race-baseline.txt": "# empty\n",
+      },
+      true,
+    );
+    git(source, ["config", "uploadpack.allowFilter", "true"]);
+    for (let n = 0; n < 4; n++) {
+      write(source, `src/old-noise-${n}.ts`, "// old".repeat(100));
+    }
+    git(source, ["add", "."]);
+    git(source, ["commit", "-m", "base rename competitors"]);
+    const base = git(source, ["rev-parse", "HEAD"]).trim();
+    git(source, ["mv", "src/old.ts", "src/new.ts"]);
+    fs.appendFileSync(path.join(source, "src/new.ts"), "// renamed\n");
+    write(source, baselineFile, "src/new.ts\t1\n");
+    git(source, ["add", "."]);
+    git(source, ["commit", "-m", "historical rename"]);
+    const renameBlob = git(source, ["rev-parse", "HEAD:src/new.ts"]).trim();
+    fs.appendFileSync(path.join(source, "src/new.ts"), "// current snapshot\n");
+    for (let n = 0; n < 4; n++) {
+      fs.unlinkSync(path.join(source, `src/old-noise-${n}.ts`));
+      write(source, `src/new-noise-${n}.ts`, "// new".repeat(100));
+    }
+    git(source, ["add", "."]);
+    git(source, ["commit", "-m", "later change"]);
+    const clone = tempDirs.make("ratchet-filtered-client-");
+    git(source, ["clone", "--filter=blob:none", "--depth=1", pathToFileURL(source).href, clone]);
+    git(clone, ["fetch", "--no-filter", "--depth=1", "origin", base]);
+    git(clone, ["fetch", "--unshallow", "--filter=blob:none", "origin"]);
+    git(clone, ["config", "diff.renameLimit", "1"]);
+    const planned = missingRatchetRenameObjects(clone, base, baselineFile, ["src"]);
+    expect(planned).toContain(renameBlob);
+    expect(planned.length).toBeLessThanOrEqual(512);
+    const readObject = () =>
+      spawnSync("git", ["cat-file", "-e", renameBlob], {
+        cwd: clone,
+        env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+      });
+    expect(readObject().status).not.toBe(0);
+    if (denied) {
+      git(clone, ["remote", "set-url", "origin", "file:///unavailable-ratchet-origin.git"]);
+    }
+    const result = spawnSync(
+      "python3",
+      [
+        "-I",
+        "-S",
+        path.resolve(".github/actions/git-owner/owner.py"),
+        "--policy",
+        path.resolve(".github/actions/ensure-base-commit/policy.py"),
+      ],
+      {
+        cwd: clone,
+        encoding: "utf8",
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          BASE_ACTION_PATH: path.resolve(".github/actions/ensure-base-commit"),
+          BASE_SHA: base,
+          FETCH_REF: "main",
+          REQUIRE_HISTORY: "true",
+          RATCHET_RENAMES: "true",
+          PATH: process.env.PATH,
+        },
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(denied ? 1 : 0);
+    if (denied) {
+      expect(readObject().status).not.toBe(0);
+    } else {
+      expect(readObject().status).toBe(0);
+      expect(missingRatchetRenameObjects(clone, base, baselineFile, ["src"])).toEqual([]);
+      expect(main(clone, ["--base", base, "--no-merge-base"])).toBe(0);
+      fs.appendFileSync(path.join(clone, "src/new.ts"), "export const extra = value as number;\n");
+      expect(main(clone, ["--base", base, "--no-merge-base"])).toBe(1);
+    }
+  },
+  45_000,
+);

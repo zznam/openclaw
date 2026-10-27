@@ -327,6 +327,7 @@ function committedRatchetRename(
   destination: string,
   baseBaseline: ReadonlyMap<string, number>,
   sourceRoots: string[],
+  missingObjects?: Set<string>,
 ): string | undefined {
   const git = (...args: string[]) =>
     execFileSync("git", args, {
@@ -365,14 +366,15 @@ function committedRatchetRename(
     let tip = "HEAD";
     let cursor = destination;
     for (let hop = 0; hop < 16; hop++) {
+      // Discover creation without comparing promised content. The complete
+      // candidate pool is hydrated and verified below before identity is used.
       const commit = git(
         "-c",
         "diff.renameLimit=256",
         "log",
         "-1",
-        "--follow",
-        "--find-renames",
-        "--diff-filter=AR",
+        "--no-renames",
+        "--diff-filter=A",
         "--format=%H",
         `${baseRef}..${tip}`,
         "--",
@@ -381,7 +383,7 @@ function committedRatchetRename(
       if (!/^[0-9a-f]{40,64}$/u.test(commit)) {
         return undefined;
       }
-      const parents = git("show", "-s", "--format=%P", commit).trim().split(/\s+/u);
+      const parents = git("show", "--no-renames", "-s", "--format=%P", commit).trim().split(/\s+/u);
       if (parents.length !== 1 || !parents[0]) {
         return undefined;
       }
@@ -402,6 +404,49 @@ function committedRatchetRename(
       // At most 256 squared similarity comparisons, even for adversarial history.
       if (candidates.length > 512) {
         return undefined;
+      }
+      if (missingObjects) {
+        // Preparation discovers only this verifier's bounded candidate pool.
+        // It grants no allowance; rerun the same verifier after owned hydration.
+        const raw = git(
+          "diff",
+          "--raw",
+          "--no-abbrev",
+          "--no-renames",
+          "--diff-filter=AD",
+          parent,
+          commit,
+          "--",
+          ...sourceRoots,
+        );
+        let missing = false;
+        for (const line of raw.split("\n")) {
+          if (!line.startsWith(":")) {
+            continue;
+          }
+          const fields = line.slice(1).split(/\s+/u);
+          for (const [mode, object] of [
+            [fields[0], fields[2]],
+            [fields[1], fields[3]],
+          ]) {
+            if (
+              typeof object !== "string" ||
+              !/^(100644|100755|120000)$/u.test(mode ?? "") ||
+              !/^[0-9a-f]{40,64}$/u.test(object)
+            ) {
+              continue;
+            }
+            try {
+              git("cat-file", "-e", object);
+            } catch {
+              missingObjects.add(object);
+              missing = true;
+            }
+          }
+        }
+        if (missing) {
+          return undefined;
+        }
       }
       const renameArgs = [
         "-c",
@@ -467,6 +512,29 @@ function committedRatchetRename(
     // Missing/ambiguous history is not evidence for transferring an allowance.
   }
   return undefined;
+}
+
+// Acquisition only: final admission always runs baselineWithVerifiedRenames again.
+export function missingRatchetRenameObjects(
+  root: string,
+  baseRef: string,
+  baselinePath: string,
+  sourceRoots: string[],
+) {
+  const parse = (source: string) => parseRatchetCounts(source, baselinePath);
+  const reference = loadRatchetReference(root, baseRef, baselinePath, parse);
+  const missing = new Set<string>();
+  if (!reference) {
+    return [];
+  }
+  const current = loadRatchetSnapshot(root, baselinePath, false, parse);
+  const direct = new Set(listRatchetRenames(root, baseRef, false, sourceRoots).map(({ to }) => to));
+  for (const [destination, count] of current) {
+    if (count > (reference.get(destination) ?? 0) && !direct.has(destination)) {
+      committedRatchetRename(root, baseRef, false, destination, reference, sourceRoots, missing);
+    }
+  }
+  return [...missing].toSorted();
 }
 
 function baselineWithVerifiedRenames(

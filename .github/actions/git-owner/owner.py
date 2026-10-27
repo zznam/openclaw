@@ -484,6 +484,8 @@ def checkout_harness(sha):
         *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",
         "scripts/stage-openclaw-bun.sh", "scripts/lib/openclaw-bun.json",
         "scripts/ui-browser-runtime-artifact.mjs",
+        "scripts/prepare-ratchet-history.mts", "scripts/lib/shrink-ratchet.mts",
+        "scripts/lib/type-assertion-guard-scope.mjs",
     )
     if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
         raise GitFailure(1)

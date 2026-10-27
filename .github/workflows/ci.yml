@@ -790,6 +790,8 @@ jobs:
                   *upgrade_scripts, *npm_lock_scripts, "scripts/ci-additional-checks.sh",
                   "scripts/stage-openclaw-bun.sh", "scripts/lib/openclaw-bun.json",
                   "scripts/ui-browser-runtime-artifact.mjs",
+                  "scripts/prepare-ratchet-history.mts", "scripts/lib/shrink-ratchet.mts",
+                  "scripts/lib/type-assertion-guard-scope.mjs",
               )
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
@@ -3001,6 +3003,7 @@ jobs:
           fetch-ref: ${{ github.event.repository.default_branch }}
           require-history: "true"
           policy-ledger-path: config/test-mock-exports-baseline.txt
+          ratchet-renames: "true"
           history-paths: config/test-mock-exports-baseline.txt
 
       - name: Run baseline ratchets
