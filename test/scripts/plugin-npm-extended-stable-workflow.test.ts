@@ -771,7 +771,8 @@ it("prepares and independently reads back immutable package evidence", () => {
     "Checkout trusted packaging tooling",
   );
   expect(preflightCheckout.with).toMatchObject({
-    ref: "${{ github.workflow_sha }}",
+    repository: "${{ job.workflow_repository }}",
+    ref: "${{ job.workflow_sha }}",
     path: ".release-tooling",
     "persist-credentials": false,
   });
@@ -833,7 +834,10 @@ it("prepares and independently reads back immutable package evidence", () => {
   expect(verify?.strategy?.matrix?.plugin).toContain("all_matrix");
   expect(verify?.name).toBe("Preflight plugin npm package (${{ matrix.plugin.packageName }})");
   const trustedCheckout = step(verify, "Checkout trusted npm preflight tooling");
-  expect(trustedCheckout.with?.ref).toBe("${{ github.workflow_sha }}");
+  expect(trustedCheckout.with).toMatchObject({
+    repository: "${{ job.workflow_repository }}",
+    ref: "${{ job.workflow_sha }}",
+  });
   const download = step(verify, "Download immutable npm preflight artifact");
   expect(download.uses).toBe("actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333");
   expect(download.with?.name).toBe(
@@ -943,7 +947,8 @@ it("runs one trusted-publisher exchange job directly after selected-package plan
   expect(oidc?.strategy).toBeUndefined();
   expect(step(oidc, "Checkout trusted OIDC preflight tooling").with).toMatchObject({
     "persist-credentials": false,
-    ref: "${{ github.workflow_sha }}",
+    repository: "${{ job.workflow_repository }}",
+    ref: "${{ job.workflow_sha }}",
   });
   expect(step(oidc, "Setup trusted Node").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
   const exchange = step(oidc, "Verify npm trusted-publisher exchange");
@@ -1030,9 +1035,10 @@ it("publishes extended-stable with OIDC only and verifies every package tag", ()
   );
   expect(consume.run).toContain("--workflow-jobs-metadata");
   expect(consume.run).toContain("--source-package-json-sha256");
-  expect(publishStep("Checkout trusted publication tooling").with?.ref).toBe(
-    "${{ github.workflow_sha }}",
-  );
+  expect(publishStep("Checkout trusted publication tooling").with).toMatchObject({
+    repository: "${{ job.workflow_repository }}",
+    ref: "${{ job.workflow_sha }}",
+  });
   expect(
     publishJob?.steps?.some((entry) => entry.uses === "./.github/actions/setup-node-env"),
   ).toBe(false);

@@ -1429,8 +1429,8 @@ describe("release validation no-push transport", () => {
     expect(workflowIdentity.run).toContain("job.workflow_sha must be a full lowercase commit SHA");
     const harnessCheckout = step(validation, "Materialize selected-source contract resolver").with;
     expect(harnessCheckout).toMatchObject({
-      repository: "${{ steps.workflow.outputs.workflow_repository }}",
-      ref: "${{ steps.workflow.outputs.workflow_sha }}",
+      repository: "${{ job.workflow_repository }}",
+      ref: "${{ job.workflow_sha }}",
       path: ".release-harness",
       "fetch-depth": 1,
       "persist-credentials": false,
@@ -1471,8 +1471,8 @@ describe("release validation no-push transport", () => {
     expect(exactRevisionCheckouts).toHaveLength(12);
     for (const { candidate, jobName } of exactRevisionCheckouts) {
       expect(candidate.with, jobName).toMatchObject({
-        repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
-        ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+        repository: "${{ job.workflow_repository }}",
+        ref: "${{ job.workflow_sha }}",
         "persist-credentials": false,
       });
     }

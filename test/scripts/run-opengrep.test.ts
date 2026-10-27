@@ -82,11 +82,21 @@ function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.Process
     if (step.uses) {
       const actionPath = path.join(repo, step.uses);
       values.set("github.action_path", actionPath);
-      for (const [key, value] of Object.entries(step.with ?? {})) {
-        values.set(`inputs.${key}`, interpolate(value));
+      const action: {
+        inputs?: Record<string, { default?: string; required?: boolean }>;
+        runs: { steps: OpengrepWorkflowStep[] };
+      } = parse(fs.readFileSync(path.join(actionPath, "action.yml"), "utf8"));
+      for (const [key, declaration] of Object.entries(action.inputs ?? {})) {
+        const value = step.with?.[key] ?? declaration.default;
+        if (value === undefined && declaration.required) {
+          throw new Error(`Missing required action input: ${key}`);
+        }
+        values.set(`inputs.${key}`, interpolate(value ?? ""));
       }
-      const action = parse(fs.readFileSync(path.join(actionPath, "action.yml"), "utf8"));
-      const actionStep: OpengrepWorkflowStep = action.runs.steps[0];
+      const actionStep = action.runs.steps[0];
+      if (!actionStep) {
+        throw new Error(`Composite action has no executable step: ${step.uses}`);
+      }
       command = actionStep.run;
       commandEnv = { ...commandEnv, ...renderEnv(actionStep.env) };
     }

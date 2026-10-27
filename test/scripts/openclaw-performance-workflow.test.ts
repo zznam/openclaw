@@ -249,8 +249,14 @@ describe("OpenClaw performance workflow", () => {
       expect(checkout.with?.["persist-credentials"]).toBe(false);
       expect(checkout.with?.["fetch-depth"]).toBe(1);
     }
-    expect(helper.with?.ref).toBe("${{ github.workflow_sha }}");
-    expect(candidate.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(helper.with).toMatchObject({
+      repository: "${{ job.workflow_repository }}",
+      ref: "${{ job.workflow_sha }}",
+    });
+    expect(candidate.with).toMatchObject({
+      repository: "${{ job.workflow_repository }}",
+      ref: "${{ job.workflow_sha }}",
+    });
     expect(baseline.with?.ref).toBe("${{ inputs.baseline_ref }}");
     expect(run.run).toContain("scripts/vitest-pair-benchmark.mts");
     expect(run.run).toContain("--baseline-sha");
@@ -634,7 +640,10 @@ describe("OpenClaw performance workflow", () => {
     });
 
     for (const harness of [kovaHarness, sourceHarness, publisherHarness]) {
-      expect(harness.with?.ref).toBe("${{ github.workflow_sha }}");
+      expect(harness.with).toMatchObject({
+        repository: "${{ job.workflow_repository }}",
+        ref: "${{ job.workflow_sha }}",
+      });
       expect(harness.with?.["persist-credentials"]).toBe(false);
     }
     for (const setup of [kovaSetup, sourceSetup]) {
@@ -770,7 +779,7 @@ describe("OpenClaw performance workflow", () => {
     expect(workflow.jobs?.kova?.needs).toBe("resolve_target");
     expect(workflow.jobs?.source_performance?.needs).toBe("resolve_target");
     expect(targetCheckout.uses).toBe("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
-    expect(targetCheckout.with?.ref).toBe("${{ inputs.target_ref || github.sha }}");
+    expect(targetCheckout.with?.ref).toBe("${{ github.sha }}");
     expect(targetCheckout.with?.path).toBe(".artifacts/performance-target");
     expect(targetCheckout.with?.["sparse-checkout-cone-mode"]).toBe(false);
     expect(targetCheckout.with?.["persist-credentials"]).toBe(false);
@@ -784,9 +793,9 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.run).not.toContain("gh api");
     expect(resolveTarget.run).toContain("checkout_ref=$resolved_sha");
     expect(resolveTarget.run).toContain("tested_sha=$resolved_sha");
-    expect(checkout.with?.ref).toBe("${{ needs.resolve_target.outputs.checkout_ref }}");
+    expect(checkout.with?.ref).toBe("${{ github.sha }}");
     expect(record.run).toContain('[[ "$tested_sha" != "$EXPECTED_TESTED_SHA" ]]');
-    expect(sourceCheckout.with?.ref).toBe("${{ needs.resolve_target.outputs.checkout_ref }}");
+    expect(sourceCheckout.with?.ref).toBe("${{ github.sha }}");
     expect(sourceRecord.run).toContain('[[ "$tested_sha" != "$EXPECTED_TESTED_SHA" ]]');
     expect(
       Object.values(workflow.jobs ?? {})
@@ -1125,7 +1134,8 @@ describe("OpenClaw performance workflow", () => {
       "scripts/lib/kova-report-selector.mjs",
     );
     expect(helper.with).toMatchObject({
-      ref: "${{ github.workflow_sha }}",
+      repository: "${{ job.workflow_repository }}",
+      ref: "${{ job.workflow_sha }}",
       path: ".artifacts/performance-publisher",
       "sparse-checkout":
         "scripts/lib/kova-report-publish-files.mjs\nscripts/lib/kova-report-selector.mjs\n",

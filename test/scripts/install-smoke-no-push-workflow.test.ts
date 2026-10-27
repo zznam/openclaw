@@ -156,8 +156,8 @@ it("makes the reusable core artifact-only and rejects registry transport", () =>
 job.workflow_sha must be a full lowercase commit SHA`);
   assertText(workflowIdentity.run).excludes(`EXPECTED_WORKFLOW_SHA`);
   expect(step(preflight, "Materialize selected-source contract resolver").with).toMatchObject({
-    repository: "${{ steps.workflow.outputs.workflow_repository }}",
-    ref: "${{ steps.workflow.outputs.workflow_sha }}",
+    repository: "${{ job.workflow_repository }}",
+    ref: "${{ job.workflow_sha }}",
     path: ".release-harness",
     "persist-credentials": false,
     "sparse-checkout": "scripts/resolve-fs-safe-native-contract.mjs",

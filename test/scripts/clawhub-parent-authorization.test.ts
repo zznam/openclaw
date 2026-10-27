@@ -235,7 +235,7 @@ describe("ClawHub parent publication authorization", () => {
     const checkout = approval.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
     expect(checkout).toMatchObject({
       if: `${directRecovery} || ${receiptRoute}`,
-      with: { ref: "${{ github.workflow_sha }}" },
+      with: { repository: "${{ job.workflow_repository }}", ref: "${{ job.workflow_sha }}" },
     });
     const write = approval.steps.find((step) => step.run?.includes("recovery-approval --output"));
     expect(write?.if).toBe(directRecovery);

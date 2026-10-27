@@ -786,7 +786,7 @@ function packageToolingCheckoutFixture() {
         options.callerWorkflowRef ??
         "openclaw/openclaw/.github/workflows/other-caller.yml@refs/heads/main",
       GITHUB_RUN_ATTEMPT: String(options.attempt ?? 1),
-      WORKFLOW_REF: options.workflowRef ?? "main",
+      WORKFLOW_REF: options.workflowRef || context.workflow_sha,
       PACKAGE_REF: advancedSha,
     };
     const outputs = (file: string): Record<string, string> =>
@@ -822,6 +822,7 @@ function packageToolingCheckoutFixture() {
       String(checkout.with?.ref).replace(/^\$\{\{(.*)\}\}$/u, "$1"),
       {
         inputs: { workflow_ref: env.WORKFLOW_REF, package_ref: env.PACKAGE_REF },
+        job: context,
         steps: { tooling_identity: { outputs: identityOutputs } },
       },
     );
@@ -1908,21 +1909,31 @@ describe("frozen admission workflow barriers", () => {
     const steps = job.steps ?? [];
     const identity = workflowStep(job, "Resolve called package tooling identity");
     const setup = workflowStep(job, "Setup Node environment");
-    expect(steps[0]).toEqual({
+    expect(steps.slice(0, 3).map((step) => step.name)).toEqual([
+      "Authorize selected-source execution",
+      "Bind source to native event commit",
+      "Bind package inputs to default cache scope",
+    ]);
+    for (const admission of steps.slice(0, 3)) {
+      expect(admission.uses).toBe("actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3");
+      expect(admission.run).toBeUndefined();
+    }
+    expect(steps[3]).toEqual({
       name: "Setup supported Node runtime",
       uses: "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
       with: { "node-version": "${{ env.NODE_VERSION }}", "package-manager-cache": false },
     });
-    expect(steps.indexOf(identity)).toBe(1);
+    expect(steps.indexOf(identity)).toBe(4);
     expect(steps.indexOf(identity)).toBeLessThan(steps.indexOf(checkout));
     expect(steps.indexOf(checkout)).toBeLessThan(steps.indexOf(validate));
     expect(steps.indexOf(validate)).toBeLessThan(steps.indexOf(setup));
     expect(identity.env).toEqual({
       JOB_CONTEXT: "${{ toJSON(job) }}",
-      WORKFLOW_REF: "${{ inputs.workflow_ref }}",
+      WORKFLOW_REF: "${{ inputs.workflow_ref || job.workflow_sha }}",
     });
     expect(checkout.with).toEqual({
-      ref: "${{ steps.tooling_identity.outputs.sha }}",
+      repository: "${{ job.workflow_repository }}",
+      ref: "${{ job.workflow_sha }}",
       "fetch-depth": 0,
       filter: "blob:none",
       "persist-credentials": false,
@@ -1954,6 +1965,7 @@ describe("frozen admission workflow barriers", () => {
     ["refs/tags/release-candidate", "refs/tags/release-candidate"],
     ["captured-sha", "refs/heads/main"],
     ["captured-sha", "captured-sha"],
+    ["", "refs/heads/main"],
   ])("accepts package tooling assertion %s for captured %s", (input, ref) => {
     const fixture = packageToolingCheckoutFixture();
     const actual = fixture.run({
@@ -1976,7 +1988,6 @@ describe("frozen admission workflow barriers", () => {
     ["release-candidate", "refs/heads/main"],
     ["main", "refs/heads/release/candidate"],
     [" main", "refs/heads/main"],
-    ["", "refs/heads/main"],
     ["refs/heads/main\n", "refs/heads/main"],
   ])("rejects package tooling assertion %j for captured %s before checkout", (input, ref) => {
     const fixture = packageToolingCheckoutFixture();
@@ -5050,7 +5061,9 @@ describe("package acceptance workflow", () => {
     checkoutName: string,
     consumerName: string,
     toolingPath = ".release-tooling",
-    toolingRef = "${{ github.workflow_sha }}",
+    toolingRef = [PLUGIN_NPM_RELEASE_WORKFLOW, PLUGIN_CLAWHUB_RELEASE_WORKFLOW].includes(file)
+      ? "${{ job.workflow_sha }}"
+      : "${{ github.workflow_sha }}",
   ) {
     return { file, jobName, checkoutName, consumerName, toolingPath, toolingRef };
   }
@@ -5871,6 +5884,9 @@ esac
       const consumer = workflowStep(job, consumerName);
       expect(checkout.with).toMatchObject({
         ref: toolingRef,
+        ...(toolingRef === "${{ job.workflow_sha }}"
+          ? { repository: "${{ job.workflow_repository }}" }
+          : {}),
         path: toolingPath,
         "persist-credentials": false,
       });
@@ -5895,7 +5911,8 @@ esac
       "fetch-depth": 1,
       path: ".release-tooling",
       "persist-credentials": false,
-      ref: "${{ github.workflow_sha }}",
+      repository: "${{ job.workflow_repository }}",
+      ref: "${{ job.workflow_sha }}",
     });
     expect(checkout.with?.["sparse-checkout"]).toBeUndefined();
     for (const [name, script] of [
@@ -9929,7 +9946,7 @@ describe("package artifact reuse", () => {
     expect(producerCheckouts.map(({ uses, with: inputs }) => ({ inputs, uses }))).toEqual([
       {
         inputs: {
-          ref: "${{ needs.validate_selected_ref.outputs.selected_sha }}",
+          ref: "${{ github.event_name == 'pull_request' && (needs.validate_selected_ref.outputs.selected_sha) || github.sha }}",
           "fetch-depth": 1,
           "persist-credentials": false,
         },
@@ -9937,8 +9954,8 @@ describe("package artifact reuse", () => {
       },
       {
         inputs: {
-          repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
-          ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+          repository: "${{ job.workflow_repository }}",
+          ref: "${{ job.workflow_sha }}",
           "fetch-depth": 1,
           path: ".release-harness",
           "persist-credentials": false,
@@ -12735,7 +12752,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
       with: {
         "persist-credentials": false,
-        ref: "${{ github.workflow_sha }}",
+        repository: "${{ job.workflow_repository }}",
+        ref: "${{ job.workflow_sha }}",
         path: ".release-qa-tooling-trusted",
         "sparse-checkout":
           "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-messages.ts\nextensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts\n",
@@ -16098,7 +16116,7 @@ esac
     );
     expect(clawHubPackTargetGuard.run).toContain('[[ ! "${TARGET_SHA}" =~ ^[a-f0-9]{40}$ ]]');
     expect(workflowStep(clawHubPackJob, "Checkout").with).toMatchObject({
-      ref: "${{ needs.preview_plugins_clawhub.outputs.ref_revision }}",
+      ref: "${{ github.sha }}",
       "fetch-depth": 1,
       "persist-credentials": false,
     });

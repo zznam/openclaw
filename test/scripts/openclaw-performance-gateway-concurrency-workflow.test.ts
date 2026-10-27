@@ -25,7 +25,10 @@ it("exposes credentials only to the trust-gated live step", () => {
   for (const scope of [job.env, ...job.steps.filter((candidate) => candidate !== live)]) {
     expect(JSON.stringify(scope)).not.toContain("secrets.");
   }
-  expect(step("Checkout Gateway concurrency helpers").with?.ref).toBe("${{ github.workflow_sha }}");
+  expect(step("Checkout Gateway concurrency helpers").with).toMatchObject({
+    repository: "${{ job.workflow_repository }}",
+    ref: "${{ job.workflow_sha }}",
+  });
 });
 
 posixIt.each([

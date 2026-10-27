@@ -218,7 +218,14 @@ it.each([coreFlow, pluginFlow])(
         ? "Checkout trusted validation verifier"
         : "Checkout trusted publication tooling",
     );
-    expect(checkout.with?.ref).toBe("${{ github.workflow_sha }}");
+    if (workflow === core) {
+      expect(checkout.with?.ref).toBe("${{ github.workflow_sha }}");
+    } else {
+      expect(checkout.with).toMatchObject({
+        repository: "${{ job.workflow_repository }}",
+        ref: "${{ job.workflow_sha }}",
+      });
+    }
     expect(names.indexOf(checkout.name)).toBeLessThan(names.indexOf(wait.name));
   },
 );
